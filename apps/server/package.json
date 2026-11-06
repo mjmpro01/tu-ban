@@ -12,10 +12,12 @@
     "@fastify/static": "^10.1.10",
     "@tu-ban/shared": "*",
     "fastify": "^5.12.8",
+    "pg": "^8.23.1",
     "socket.io": "^4.8.4"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/pg": "^8.23.1",
     "tsx": "^4.23.15"
   }
 }

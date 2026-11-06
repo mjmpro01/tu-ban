@@ -41,6 +41,11 @@ export class Orchestrator {
       }
       this.store.setAgent(toAgentInfo(c, runtime));
     }
+    const saved = await this.store.db?.load();
+    if (saved) {
+      this.store.hydrate(saved);
+      console.log(`[db] đã nạp ${saved.tasks.length} task, ${saved.events.length} event`);
+    }
     console.log(`Mode: ${MODE}. Agents: ${[...this.store.agents.values()].map((a) => `${a.id}=${a.runtime}`).join(", ")}`);
   }
 
