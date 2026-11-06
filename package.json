@@ -1,0 +1,17 @@
+{
+  "name": "tu-ban",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,green \"npm:dev -w @tu-ban/server\" \"npm:dev -w @tu-ban/web\"",
+    "build": "npm run build -w @tu-ban/web",
+    "start": "npm run start -w @tu-ban/server",
+    "typecheck": "tsc -p packages/shared && tsc -p apps/server && tsc -p apps/web",
+    "assets": "python3 tools/build_assets.py"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "typescript": "^5.9.3"
+  }
+}

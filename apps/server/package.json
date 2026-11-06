@@ -1,0 +1,21 @@
+{
+  "name": "@tu-ban/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.318",
+    "@fastify/static": "^10.1.10",
+    "@tu-ban/shared": "*",
+    "fastify": "^5.12.8",
+    "socket.io": "^4.8.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.23.15"
+  }
+}
