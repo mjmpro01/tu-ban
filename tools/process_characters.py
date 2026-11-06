@@ -21,9 +21,13 @@ COLS = 4
 ROWS = [
     ("idle_down", 2), ("idle_up", 2), ("idle_right", 2), ("idle_left", 2),
     ("walk_down", 4), ("walk_up", 4), ("walk_right", 4), ("walk_left", 4),
-    ("type", 4), ("think", 2), ("doze", 2), ("ask", 2),
+    ("type_front", 4), ("think_front", 2), ("doze_front", 2), ("ask", 2),
 ]
-FRAME_RATES = {"idle": 2, "walk": 8, "type": 8, "think": 2, "doze": 1, "ask": 3}
+# Seated-from-behind rows, derived from the idle_up (back view) frames because the
+# source atlases only contain front-facing seated poses.
+BACK_ROWS = [("type", 4), ("think", 2), ("doze", 2)]
+ALL_ROWS = ROWS + BACK_ROWS
+FRAME_RATES = {"idle": 2, "walk": 8, "type": 4, "think": 2, "doze": 1, "ask": 3}
 
 
 def column_lines(m: np.ndarray) -> list[int]:
@@ -156,6 +160,56 @@ def portrait(arr, act_bottom):
     return quantize_opaque_only(downscale(sq, (64, 64)), 40)
 
 
+def split_head(frame):
+    """Return (top row, neck row) of a standing back-view frame (neck = narrowest row below the head)."""
+    m = opaque(frame)
+    rows = np.nonzero(m.any(1))[0]
+    top = int(rows[0])
+    widths = m.sum(1)
+    lo, hi = top + 8, min(top + 18, FRAME - 1)
+    neck = lo + int(np.argmin(widths[lo:hi]))
+    return top, neck
+
+
+def seated_back(frame, head_dx=0, head_dy=0, body_dy=0, sink=4):
+    """Build a seated, back-facing frame from a standing back-view frame.
+
+    The bottom `sink` rows (legs) are dropped and the figure lowered so the chair back
+    drawn on top hides the waist. Head and body can be nudged to animate.
+    """
+    top, neck = split_head(frame)
+    body = frame.copy()
+    body[:neck] = 0
+    head = frame.copy()
+    head[neck:] = 0
+    out = np.zeros_like(frame)
+
+    def paste(layer, dx, dy):
+        src = np.roll(np.roll(layer, dy, axis=0), dx, axis=1)
+        if dy > 0:
+            src[:dy] = 0
+        m = src[..., 3] > 0
+        out[m] = src[m]
+
+    paste(body, 0, sink + body_dy)
+    paste(head, head_dx, sink + head_dy)  # head drawn last so it overlaps the shoulders
+    return out
+
+
+def back_rows(sheet):
+    """Frames for the BACK_ROWS animations, built from idle_up (row 1)."""
+    up0 = sheet[FRAME : 2 * FRAME, 0:FRAME]
+    up1 = sheet[FRAME : 2 * FRAME, FRAME : 2 * FRAME]
+    return [
+        # typing: shoulders bob while the arms (hidden by the body) work the keyboard
+        [seated_back(up0), seated_back(up0, body_dy=1, head_dy=1), seated_back(up1), seated_back(up1, body_dy=1, head_dy=1)],
+        # thinking: head tilts to the side
+        [seated_back(up0), seated_back(up0, head_dx=1)],
+        # dozing: head drops forward
+        [seated_back(up0, head_dy=2), seated_back(up0, head_dy=3)],
+    ]
+
+
 def process(name):
     arr = load(SRC / "characters" / f"{name}_atlas.png")
     xs, cells, grid_bottom = find_sprite_rows(arr)
@@ -175,7 +229,7 @@ def process(name):
             heads = [head_width(s) for s in row if s is not None]
             row_scale.append(scale * ref_head / float(np.median(heads)) if heads else scale)
 
-    sheet = np.zeros((FRAME * len(ROWS), FRAME * COLS, 4), np.uint8)
+    sheet = np.zeros((FRAME * len(ALL_ROWS), FRAME * COLS, 4), np.uint8)
     anims = {}
     for r, ((anim, expected), row) in enumerate(zip(ROWS, cells)):
         frames = [s for s in row if s is not None][:expected]
@@ -189,6 +243,12 @@ def process(name):
             "frameRate": FRAME_RATES[kind],
             "repeat": -1,
         }
+    for i, ((anim, _), frames) in enumerate(zip(BACK_ROWS, back_rows(sheet))):
+        r = len(ROWS) + i
+        for c, fr in enumerate(frames):
+            sheet[r * FRAME : (r + 1) * FRAME, c * FRAME : (c + 1) * FRAME] = fr
+        anims[anim] = {"frames": [r * COLS + c for c in range(len(frames))],
+                       "frameRate": FRAME_RATES[anim], "repeat": -1}
     sheet = quantize_opaque_only(sheet, 32)
     save(sheet, OUT / "characters" / f"char_{name}.png")
     save(portrait(arr, grid_bottom), OUT / "portraits" / f"portrait_{name}.png")

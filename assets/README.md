@@ -19,7 +19,7 @@ Khi có ảnh gốc mới, ghi đè file trong `source/` (giữ đúng tên) r�
 
 | File | Mô tả |
 |---|---|
-| `characters/char_<name>.png` | Spritesheet frame **32×32**, lưới 4 cột × 12 hàng. Nhân vật cao khoảng 30px, chân đặt ở đáy frame |
+| `characters/char_<name>.png` | Spritesheet frame **32×32**, lưới 4 cột × 15 hàng. Nhân vật cao khoảng 30px, chân đặt ở đáy frame |
 | `characters/characters.json` | Tên animation → chỉ số frame + frameRate (5 nhân vật dùng chung bố cục) |
 | `portraits/portrait_<name>.png` | Chân dung **64×64** cho dashboard |
 | `tiles/tiles_floor.png` + `.json` | 32 tile sàn **16×16** (gỗ, thảm cam/xanh, caro, xi măng, mép thảm) |
@@ -36,9 +36,12 @@ Khi có ảnh gốc mới, ghi đè file trong `source/` (giữ đúng tên) r�
 
 `idle_down`, `idle_up`, `idle_right`, `idle_left` (2 frame) ·
 `walk_down`, `walk_up`, `walk_right`, `walk_left` (4 frame) ·
-`type` (4) · `think` (2) · `doze` (2) · `ask` (2)
+`type_front` (4) · `think_front` (2) · `doze_front` (2) · `ask` (2) ·
+`type` (4) · `think` (2) · `doze` (2)
 
-Các frame ngồi (`type`, `think`, `doze`) nhìn từ phía trước và đã được cân lại để cùng tỉ lệ đầu với frame đứng.
+**Dùng `type` / `think` / `doze` khi nhân vật ngồi ở bàn**: nhân vật ngồi phía trước bàn, quay lưng về camera, màn hình hiện phía trên đầu. Vẽ `chair_back` đè lên phần dưới nhân vật. Bộ ảnh gen ra chỉ có tư thế ngồi quay mặt, nên 3 animation này được **sinh tự động từ frame `idle_up`**: nhún vai khi gõ phím, nghiêng đầu khi suy nghĩ, gục đầu khi ngủ gật. Muốn có cử động tay thật thì gen lại sheet ngồi quay lưng.
+
+Các animation `*_front` là tư thế ngồi quay mặt từ ảnh gốc, đã cân lại cho cùng tỉ lệ đầu với frame đứng. Dùng khi nhân vật ngồi phía sau bàn, ví dụ ở bàn họp.
 
 ### Emote (theo thứ tự hàng)
 

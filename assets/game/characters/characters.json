@@ -75,17 +75,17 @@
       "frameRate": 8,
       "repeat": -1
     },
-    "type": {
+    "type_front": {
       "frames": [
         32,
         33,
         34,
         35
       ],
-      "frameRate": 8,
+      "frameRate": 4,
       "repeat": -1
     },
-    "think": {
+    "think_front": {
       "frames": [
         36,
         37
@@ -93,7 +93,7 @@
       "frameRate": 2,
       "repeat": -1
     },
-    "doze": {
+    "doze_front": {
       "frames": [
         40,
         41
@@ -107,6 +107,32 @@
         45
       ],
       "frameRate": 3,
+      "repeat": -1
+    },
+    "type": {
+      "frames": [
+        48,
+        49,
+        50,
+        51
+      ],
+      "frameRate": 4,
+      "repeat": -1
+    },
+    "think": {
+      "frames": [
+        52,
+        53
+      ],
+      "frameRate": 2,
+      "repeat": -1
+    },
+    "doze": {
+      "frames": [
+        56,
+        57
+      ],
+      "frameRate": 1,
       "repeat": -1
     }
   },

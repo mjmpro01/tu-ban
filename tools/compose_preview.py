@@ -87,17 +87,14 @@ def main():
     state = ["desk_on_orange", "desk_on_orange", "desk_off", "desk_on_blue", "desk_on_blue"]
     for (dx, dy), name, st in zip(desks, who, state):
         obj(st, dx * T, dy * T)
-    # characters: seated typing (action row 8) behind desks, one standing, one dozing
-    for i, ((dx, dy), name) in enumerate(zip(desks, who)):
-        row = {0: 8, 1: 9, 2: 10, 3: 8, 4: 8}[i]
-        char(name, row, 0, dx * T, dy * T - 14)
+    # characters sit in front of their desk with their back to the camera; the chair back
+    # is drawn over them. Back-seated rows: 12 = type, 13 = think, 14 = doze.
+    seated_row = {"manager": 13, "researcher": 12, "writer": 14, "cursor": 12, "copilot": 12}
     for (dx, dy), name in zip(desks, who):
-        obj("chair_back", dx * T + 10, dy * T + 8)
-    emote(0, 3 * T + 6, 8 * T - 52)   # manager thinking
-    emote(6, 7 * T + 6, 8 * T - 52)   # researcher searching
-    emote(3, 3 * T + 6, 12 * T - 52)  # writer sleeping
-    emote(7, 7 * T + 6, 12 * T - 52)  # cursor coding
-    emote(9, 11 * T + 6, 12 * T - 52)  # copilot remote
+        char(name, seated_row[name], 0, dx * T, dy * T + 12)
+        obj("chair_back", dx * T + 10, dy * T + 17)
+    for (dx, dy), em in zip(desks, [0, 6, 3, 7, 9]):  # thinking, search, sleep, code, remote
+        emote(em, dx * T + 6, dy * T - 42)
 
     obj("whiteboard", 17.5 * T, 9 * T)
     obj("meeting_table", 16.5 * T, 13 * T)
