@@ -1,29 +1,12 @@
-import type { AgentEvent, AgentInfo, Approval, ProviderId, Task } from "@tu-ban/shared";
+import type { AgentInfo, Approval } from "@tu-ban/shared";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createGame } from "./game/OfficeScene";
+import { HistoryDialog } from "./History";
 import { actions, store, useStore } from "./store";
-
-const PROVIDER_LABEL: Record<ProviderId, string> = { claude: "Claude", cursor: "Cursor", copilot: "Copilot", mock: "Demo" };
-const STATUS_LABEL: Record<AgentInfo["status"], string> = {
-  idle: "Rảnh",
-  working: "Đang làm",
-  waiting_approval: "Chờ duyệt",
-  error: "Lỗi",
-};
-const TASK_LABEL: Record<Task["status"], string> = {
-  queued: "Chờ",
-  running: "Đang chạy",
-  waiting_approval: "Chờ duyệt",
-  done: "Xong",
-  error: "Lỗi",
-  cancelled: "Đã huỷ",
-};
-
-const fmtCost = (n: number) => `$${n.toFixed(n < 1 ? 3 : 2)}`;
-const fmtTokens = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
-const fmtTime = (ts: number) => new Date(ts).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+import { PROVIDER_LABEL, Portrait, STATUS_LABEL, TASK_LABEL, TimelineItem, fmtCost, fmtTime, fmtTokens } from "./ui";
 
 export function App() {
+  const [historyOpen, setHistoryOpen] = useState(false);
   return (
     <div className="app">
       <main className="office">
@@ -31,12 +14,13 @@ export function App() {
         <p className="hint">Bấm vào một nhân vật để xem riêng hoạt động của agent đó.</p>
       </main>
       <aside className="dashboard">
-        <Header />
+        <Header onOpenHistory={() => setHistoryOpen(true)} />
         <Composer />
         <Approvals />
         <AgentList />
-        <Activity />
+        <Activity onOpenHistory={() => setHistoryOpen(true)} />
       </aside>
+      <HistoryDialog open={historyOpen} onClose={() => setHistoryOpen(false)} />
     </div>
   );
 }
@@ -50,7 +34,7 @@ function GameView() {
   return <div className="game" ref={ref} />;
 }
 
-function Header() {
+function Header({ onOpenHistory }: { onOpenHistory: () => void }) {
   const connected = useStore((s) => s.connected);
   const mode = useStore((s) => s.mode);
   const agents = useStore((s) => s.agents);
@@ -68,6 +52,9 @@ function Header() {
     <header className="header">
       <div className="title">
         <h1>Văn phòng AI</h1>
+        <button type="button" className="secondary small" onClick={onOpenHistory}>
+          Lịch sử
+        </button>
         <span className={`pill ${connected ? "ok" : "bad"}`}>{connected ? "Đã kết nối" : "Mất kết nối"}</span>
         {mode && <span className={`pill ${mode === "live" ? "live" : "demo"}`}>{mode === "live" ? "Live" : "Demo"}</span>}
       </div>
@@ -183,9 +170,6 @@ function ApprovalCard({ approval, agent }: { approval: Approval; agent?: AgentIn
   );
 }
 
-function Portrait({ agent, size = 40 }: { agent: AgentInfo; size?: number }) {
-  return <img className="portrait" src={`/portraits/portrait_${agent.character}.png`} width={size} height={size} alt="" />;
-}
 
 function AgentList() {
   const agents = useStore((s) => s.agents);
@@ -230,7 +214,7 @@ function AgentList() {
   );
 }
 
-function Activity() {
+function Activity({ onOpenHistory }: { onOpenHistory: () => void }) {
   const [tab, setTab] = useState<"events" | "tasks">("events");
   const selected = useStore((s) => s.selectedAgentId);
   const agents = useStore((s) => s.agents);
@@ -250,6 +234,11 @@ function Activity() {
         )}
       </div>
       {tab === "events" ? <Timeline agentId={selected} /> : <TaskList agentId={selected} />}
+      {tab === "tasks" && (
+        <button type="button" className="link see-all" onClick={onOpenHistory}>
+          Xem toàn bộ lịch sử →
+        </button>
+      )}
     </section>
   );
 }
@@ -268,41 +257,6 @@ function Timeline({ agentId }: { agentId: string | null }) {
   );
 }
 
-const EVENT_ICON: Record<AgentEvent["type"], string> = {
-  task_start: "▶",
-  thinking: "💭",
-  message: "💬",
-  tool_start: "🔧",
-  tool_end: "✓",
-  handoff: "➜",
-  approval_request: "❗",
-  approval_resolved: "🛡",
-  done: "✅",
-  error: "⚠",
-};
-
-function TimelineItem({ event, agent }: { event: AgentEvent; agent?: AgentInfo }) {
-  return (
-    <li className={`event event-${event.type}`}>
-      <span className="event-icon" aria-hidden>
-        {EVENT_ICON[event.type]}
-      </span>
-      <div className="event-body">
-        <div className="event-head">
-          <strong>{agent?.name ?? event.agentId}</strong>
-          <time>{fmtTime(event.ts)}</time>
-        </div>
-        <div className="event-summary">{event.summary}</div>
-        {event.detail && event.detail !== event.summary && (
-          <details>
-            <summary>Chi tiết</summary>
-            <pre>{event.detail}</pre>
-          </details>
-        )}
-      </div>
-    </li>
-  );
-}
 
 function TaskList({ agentId }: { agentId: string | null }) {
   const tasks = useStore((s) => s.tasks);

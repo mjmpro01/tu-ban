@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import fastifyStatic from "@fastify/static";
-import type { ClientToServer, ServerToClient } from "@tu-ban/shared";
+import { type ClientToServer, type ServerToClient, type TaskQuery, matchesTaskQuery } from "@tu-ban/shared";
 import Fastify from "fastify";
 import { Server } from "socket.io";
 import { DATABASE_URL, MODE, PORT, ROOT, WORKDIR } from "./config.ts";
@@ -26,10 +26,25 @@ app.post<{ Body: { prompt: string; agentId?: string } }>("/api/tasks", async (re
 });
 
 // Task history beyond what the dashboard keeps in memory (needs the database).
-app.get<{ Querystring: { limit?: string; before?: string; agentId?: string } }>("/api/tasks", async (req) => {
-  const limit = Math.min(Number(req.query.limit ?? 50), 200);
-  if (!db) return [...store.tasks.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
-  return db.listTasks({ limit, before: req.query.before ? Number(req.query.before) : undefined, agentId: req.query.agentId });
+app.get<{ Querystring: Record<string, string | undefined> }>("/api/tasks", async (req) => {
+  const q = req.query;
+  const query: TaskQuery & { limit: number } = {
+    limit: Math.max(1, Math.min(Number(q.limit ?? 50) || 50, 200)),
+    before: q.before ? Number(q.before) : undefined,
+    agentId: q.agentId || undefined,
+    status: (q.status || undefined) as TaskQuery["status"],
+    q: q.q?.trim() || undefined,
+  };
+  if (!db)
+    return [...store.tasks.values()]
+      .filter((t) => matchesTaskQuery(t, query))
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, query.limit);
+  return db.listTasks(query);
+});
+app.get<{ Params: { id: string } }>("/api/tasks/:id", async (req, reply) => {
+  const t = store.tasks.get(req.params.id) ?? (await db?.getTask(req.params.id));
+  return t ?? reply.code(404).send({ error: "not found" });
 });
 app.get<{ Params: { id: string } }>("/api/tasks/:id/events", async (req) => {
   if (!db) return store.events.filter((e) => e.taskId === req.params.id);

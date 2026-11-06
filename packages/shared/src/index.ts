@@ -113,6 +113,31 @@ export interface Snapshot {
   approvals: Approval[];
 }
 
+/** Filters for GET /api/tasks (task history). "active" = queued, running or waiting for approval. */
+export interface TaskQuery {
+  limit?: number;
+  /** Cursor: only tasks created before this timestamp (ms). */
+  before?: number;
+  agentId?: string;
+  status?: TaskStatus | "active";
+  /** Text search in the title and prompt. */
+  q?: string;
+}
+
+export const ACTIVE_STATUSES: TaskStatus[] = ["queued", "running", "waiting_approval"];
+
+/** Same filter as the database query, for the in-memory fallback. */
+export function matchesTaskQuery(t: Task, f: TaskQuery): boolean {
+  if (f.before !== undefined && t.createdAt >= f.before) return false;
+  if (f.agentId && t.agentId !== f.agentId) return false;
+  if (f.status === "active" ? !ACTIVE_STATUSES.includes(t.status) : f.status && t.status !== f.status) return false;
+  if (f.q) {
+    const q = f.q.toLowerCase();
+    if (!t.title.toLowerCase().includes(q) && !t.prompt.toLowerCase().includes(q)) return false;
+  }
+  return true;
+}
+
 export interface CreateTaskInput {
   prompt: string;
   /** Omit to let the Manager route the task. */

@@ -1,4 +1,4 @@
-import type { AgentEvent, Approval, Task, Usage } from "@tu-ban/shared";
+import { ACTIVE_STATUSES, type AgentEvent, type Approval, type Task, type TaskQuery, type Usage } from "@tu-ban/shared";
 import pg from "pg";
 
 /** What the store needs from a database. The office runs without one (in-memory only). */
@@ -9,7 +9,8 @@ export interface Persistence {
   saveApproval(a: Approval): void;
   saveAgentStats(agentId: string, usage: Usage, requests: number): void;
   taskEvents(taskId: string): Promise<AgentEvent[]>;
-  listTasks(opts: { limit: number; before?: number; agentId?: string }): Promise<Task[]>;
+  getTask(id: string): Promise<Task | undefined>;
+  listTasks(query: TaskQuery & { limit: number }): Promise<Task[]>;
   /** Wait for queued writes, then close the pool. */
   close(): Promise<void>;
 }
@@ -253,17 +254,32 @@ export class PgPersistence implements Persistence {
 
   async taskEvents(taskId: string) {
     await this.queue;
+    if (!/^[0-9a-f-]{36}$/i.test(taskId)) return [];
     const { rows } = await this.pool.query(`SELECT * FROM events WHERE task_id = $1 ORDER BY ts`, [taskId]);
     return rows.map(toEvent);
   }
 
-  async listTasks({ limit, before, agentId }: { limit: number; before?: number; agentId?: string }) {
+  async getTask(id: string) {
     await this.queue;
+    // ids are uuids; anything else cannot exist (and would make Postgres raise)
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return undefined;
+    const { rows } = await this.pool.query(`SELECT * FROM tasks WHERE id = $1`, [id]);
+    return rows[0] ? toTask(rows[0]) : undefined;
+  }
+
+  async listTasks({ limit, before, agentId, status, q }: TaskQuery & { limit: number }) {
+    await this.queue;
+    const statuses = status === "active" ? ACTIVE_STATUSES : status ? [status] : null;
+    // escape LIKE wildcards so the search is literal
+    const pattern = q ? `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%` : null;
     const { rows } = await this.pool.query(
       `SELECT * FROM tasks
-       WHERE ($2::timestamptz IS NULL OR created_at < $2) AND ($3::text IS NULL OR agent_id = $3)
+       WHERE ($2::timestamptz IS NULL OR created_at < $2)
+         AND ($3::text IS NULL OR agent_id = $3)
+         AND ($4::text[] IS NULL OR status = ANY($4))
+         AND ($5::text IS NULL OR title ILIKE $5 OR prompt ILIKE $5)
        ORDER BY created_at DESC LIMIT $1`,
-      [limit, date(before), agentId ?? null],
+      [limit, date(before), agentId ?? null, statuses, pattern],
     );
     return rows.map(toTask);
   }
