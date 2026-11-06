@@ -1,0 +1,27 @@
+{
+  "bubbles": {
+    "file": "bubbles.png",
+    "size": 24,
+    "corner": 8,
+    "order": [
+      "speech",
+      "thought",
+      "alert",
+      "error"
+    ]
+  },
+  "tails": {
+    "file": "bubble_tails.png",
+    "size": 8,
+    "order": [
+      "speech",
+      "thought",
+      "alert",
+      "error"
+    ]
+  },
+  "emoteFrame": {
+    "file": "emote_frame.png",
+    "size": 20
+  }
+}

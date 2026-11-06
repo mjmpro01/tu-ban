@@ -1,0 +1,120 @@
+{
+  "frameWidth": 32,
+  "frameHeight": 32,
+  "columns": 4,
+  "animations": {
+    "idle_down": {
+      "frames": [
+        0,
+        1
+      ],
+      "frameRate": 2,
+      "repeat": -1
+    },
+    "idle_up": {
+      "frames": [
+        4,
+        5
+      ],
+      "frameRate": 2,
+      "repeat": -1
+    },
+    "idle_right": {
+      "frames": [
+        8,
+        9
+      ],
+      "frameRate": 2,
+      "repeat": -1
+    },
+    "idle_left": {
+      "frames": [
+        12,
+        13
+      ],
+      "frameRate": 2,
+      "repeat": -1
+    },
+    "walk_down": {
+      "frames": [
+        16,
+        17,
+        18,
+        19
+      ],
+      "frameRate": 8,
+      "repeat": -1
+    },
+    "walk_up": {
+      "frames": [
+        20,
+        21,
+        22,
+        23
+      ],
+      "frameRate": 8,
+      "repeat": -1
+    },
+    "walk_right": {
+      "frames": [
+        24,
+        25,
+        26,
+        27
+      ],
+      "frameRate": 8,
+      "repeat": -1
+    },
+    "walk_left": {
+      "frames": [
+        28,
+        29,
+        30,
+        31
+      ],
+      "frameRate": 8,
+      "repeat": -1
+    },
+    "type": {
+      "frames": [
+        32,
+        33,
+        34,
+        35
+      ],
+      "frameRate": 8,
+      "repeat": -1
+    },
+    "think": {
+      "frames": [
+        36,
+        37
+      ],
+      "frameRate": 2,
+      "repeat": -1
+    },
+    "doze": {
+      "frames": [
+        40,
+        41
+      ],
+      "frameRate": 1,
+      "repeat": -1
+    },
+    "ask": {
+      "frames": [
+        44,
+        45
+      ],
+      "frameRate": 3,
+      "repeat": -1
+    }
+  },
+  "characters": [
+    "manager",
+    "researcher",
+    "writer",
+    "cursor",
+    "copilot"
+  ]
+}
