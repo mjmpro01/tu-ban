@@ -18,6 +18,24 @@ npm run dev
 
 Mở http://localhost:5173. Server chạy ở cổng 8787, web (Vite) ở cổng 5173.
 
+### Lưu dữ liệu vào Postgres
+
+Task, lịch sử hoạt động, yêu cầu duyệt và chỉ số token / chi phí của từng agent được lưu vào Postgres khi có biến `DATABASE_URL`. Bảng tự tạo lúc server khởi động (migration nằm trong `apps/server/src/db.ts`).
+
+```bash
+docker compose up -d
+```
+
+```bash
+DATABASE_URL=postgres://tuban:tuban@localhost:5432/tuban npm run dev
+```
+
+Không đặt `DATABASE_URL` thì mọi thứ chỉ nằm trong bộ nhớ, tắt server là mất.
+
+Task đang chạy dở khi server tắt không thể chạy tiếp: lần khởi động sau, task đó được đánh dấu lỗi "Server khởi động lại khi task đang chạy", còn yêu cầu duyệt đang chờ thì chuyển thành từ chối.
+
+### Chế độ Demo
+
 Khi **không có `ANTHROPIC_API_KEY`**, app chạy ở chế độ **Demo**: các agent làm theo kịch bản có sẵn, không tốn tiền. Dùng chế độ này để xem giao diện và hành vi của nhân vật.
 
 ### Chạy với Claude thật (chế độ Live)
@@ -52,6 +70,7 @@ Server phục vụ luôn bản web đã build ở http://localhost:8787.
 
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
+| `DATABASE_URL` |  | Chuỗi kết nối Postgres. Để trống thì chỉ lưu trong bộ nhớ |
 | `TU_BAN_MODE` | `live` nếu có `ANTHROPIC_API_KEY`, ngược lại `demo` | Ép chạy `demo` hoặc `live` |
 | `ANTHROPIC_API_KEY` |  | Khoá API cho các agent Claude |
 | `CLAUDE_MODEL` | `claude-opus-5-5` | Model cho các agent Claude (đổi riêng từng agent trong `apps/server/src/agents.ts`) |
@@ -82,7 +101,7 @@ Khi bạn không chọn agent, Manager tự giao việc theo từ khoá trong ta
 ## Cấu trúc
 
 ```
-apps/server/        Fastify + Socket.IO, orchestrator, các provider (claude, cursor, copilot, mock)
+apps/server/        Fastify + Socket.IO, orchestrator, các provider (claude, cursor, copilot, mock), Postgres (db.ts)
 apps/web/           React dashboard + Phaser 3 (văn phòng 2D)
 packages/shared/    Kiểu dữ liệu dùng chung (AgentEvent, Task, Approval…)
 assets/             Pixel art: ảnh gốc, bản đã xử lý cho game, ảnh xem trước (xem assets/README.md)
@@ -93,5 +112,5 @@ Mọi provider đều phát ra cùng một kiểu `AgentEvent`. Mỗi event mang
 
 ## Lưu ý
 
-- Dữ liệu (task, log) đang lưu trong bộ nhớ, sẽ mất khi khởi động lại server.
+- Dashboard hiển thị 100 task và 200 event gần nhất. Lịch sử cũ hơn lấy qua API: `GET /api/tasks?limit=50&before=<ms>&agentId=<id>` và `GET /api/tasks/<id>/events`.
 - Dashboard **chưa có đăng nhập**. Đừng mở cổng ra Internet khi đang chạy chế độ Live.

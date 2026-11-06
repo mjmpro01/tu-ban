@@ -4,12 +4,15 @@ import fastifyStatic from "@fastify/static";
 import type { ClientToServer, ServerToClient } from "@tu-ban/shared";
 import Fastify from "fastify";
 import { Server } from "socket.io";
-import { MODE, PORT, ROOT, WORKDIR } from "./config.ts";
+import { DATABASE_URL, MODE, PORT, ROOT, WORKDIR } from "./config.ts";
+import { PgPersistence } from "./db.ts";
 import { Orchestrator } from "./orchestrator.ts";
 import { Store } from "./store.ts";
 
 const app = Fastify({ logger: false });
-const store = new Store();
+const db = DATABASE_URL ? await PgPersistence.connect(DATABASE_URL) : undefined;
+if (!db) console.warn("DATABASE_URL chưa đặt: dữ liệu chỉ nằm trong bộ nhớ và sẽ mất khi tắt server.");
+const store = new Store(db);
 const orchestrator = new Orchestrator(store);
 await orchestrator.init();
 
@@ -20,6 +23,17 @@ app.post<{ Body: { prompt: string; agentId?: string } }>("/api/tasks", async (re
   } catch (e) {
     return reply.code(400).send({ error: (e as Error).message });
   }
+});
+
+// Task history beyond what the dashboard keeps in memory (needs the database).
+app.get<{ Querystring: { limit?: string; before?: string; agentId?: string } }>("/api/tasks", async (req) => {
+  const limit = Math.min(Number(req.query.limit ?? 50), 200);
+  if (!db) return [...store.tasks.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
+  return db.listTasks({ limit, before: req.query.before ? Number(req.query.before) : undefined, agentId: req.query.agentId });
+});
+app.get<{ Params: { id: string } }>("/api/tasks/:id/events", async (req) => {
+  if (!db) return store.events.filter((e) => e.taskId === req.params.id);
+  return db.taskEvents(req.params.id);
 });
 
 // Serve the built web app (npm run build) so one process is enough in production.
@@ -57,3 +71,12 @@ io.on("connection", (socket) => {
 
 await app.listen({ port: PORT, host: "0.0.0.0" });
 console.log(`AI office server on http://localhost:${PORT} (mode: ${MODE}, workdir: ${WORKDIR})`);
+
+const shutdown = async () => {
+  io.close();
+  await app.close();
+  await db?.close();
+  process.exit(0);
+};
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);

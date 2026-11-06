@@ -39,3 +39,6 @@ export const CURSOR_AGENT_CMD = env.CURSOR_AGENT_CMD ?? "cursor-agent";
 
 /** Delay multiplier for the demo provider (lower = faster). */
 export const DEMO_SPEED = Number(env.DEMO_SPEED ?? 1);
+
+/** Postgres connection string. Unset = keep everything in memory only. */
+export const DATABASE_URL = env.DATABASE_URL;
