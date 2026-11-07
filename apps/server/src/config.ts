@@ -47,3 +47,13 @@ export const DATABASE_URL = env.DATABASE_URL;
 export const MAX_TREE_BUDGET_USD = Number(env.MAX_TREE_BUDGET_USD ?? 5);
 export const MAX_SUBTASKS = Number(env.MAX_SUBTASKS ?? 8);
 export const MAX_REVIEW_ROUNDS = Number(env.MAX_REVIEW_ROUNDS ?? 2);
+
+/** First admin account, created at start-up when no account exists yet. */
+export const ADMIN_USERNAME = env.ADMIN_USERNAME;
+export const ADMIN_PASSWORD = env.ADMIN_PASSWORD;
+
+/** Public address of the dashboard (used in notification links). */
+export const PUBLIC_URL = (env.PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
+
+/** Send the session cookie over HTTPS only. On by default when PUBLIC_URL is https. */
+export const COOKIE_SECURE = env.COOKIE_SECURE ? env.COOKIE_SECURE === "1" : PUBLIC_URL.startsWith("https://");

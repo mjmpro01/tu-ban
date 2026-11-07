@@ -1,5 +1,25 @@
 // Types shared by the server and the web client.
 
+export type Role = "admin" | "member";
+
+export interface UserInfo {
+  id: string;
+  username: string;
+  displayName: string;
+  role: Role;
+  disabled: boolean;
+  createdAt: number;
+}
+
+/** GET /api/auth/me. `needsSetup` = no account exists yet: the first visitor creates the admin. */
+export interface MeResponse {
+  user: UserInfo | null;
+  needsSetup: boolean;
+}
+
+/** Header every state-changing API request must carry (blocks cross-site form posts). */
+export const CSRF_HEADER = "x-tuban";
+
 export type ProviderId = "claude" | "cursor" | "copilot" | "mock";
 export type CharacterId = "manager" | "researcher" | "writer" | "cursor" | "copilot";
 
@@ -141,6 +161,10 @@ export interface Task {
   kind: TaskKind;
   status: TaskStatus;
   createdAt: number;
+  /** Display name of the user who created the request (sub-tasks inherit it). */
+  createdBy?: string;
+  /** User id of the creator (lets members cancel their own tasks). */
+  createdById?: string;
   startedAt?: number;
   finishedAt?: number;
   result?: string;
@@ -178,6 +202,8 @@ export interface AgentEvent {
   targetAgentId?: string;
   /** For meetings: the agents taking part. */
   participants?: string[];
+  /** The person behind the event (approvals, config changes, cancellations). */
+  actor?: string;
   usage?: Usage;
 }
 
@@ -192,6 +218,7 @@ export interface Approval {
   input: string;
   status: ApprovalStatus;
   createdAt: number;
+  decidedBy?: string;
 }
 
 export interface Snapshot {

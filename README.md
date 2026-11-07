@@ -18,6 +18,28 @@ npm run dev
 
 Mở http://localhost:5173. Server chạy ở cổng 8787, web (Vite) ở cổng 5173.
 
+### Đăng nhập
+
+Dashboard cần đăng nhập. Lần chạy đầu tiên, nếu chưa có tài khoản nào, màn hình đầu tiên là **tạo tài khoản admin**. Nếu server mở ra mạng, hãy tạo admin trước bằng biến môi trường để không ai khác giành quyền tạo admin:
+
+```bash
+ADMIN_USERNAME=minh ADMIN_PASSWORD='mat-khau-dai' npm run dev
+```
+
+Biến này chỉ có tác dụng khi chưa có tài khoản nào.
+
+| Vai trò | Được làm |
+|---|---|
+| **Admin** | Mọi thứ: cấu hình agent và skill, **duyệt / từ chối lệnh**, quản lý người dùng |
+| **Thành viên** | Giao việc, xem văn phòng và lịch sử, huỷ task do chính mình tạo |
+
+- Mật khẩu băm bằng scrypt. Phiên đăng nhập lưu 7 ngày, cookie `httpOnly` + `SameSite=Lax`, kèm `Secure` khi `PUBLIC_URL` là https (hoặc đặt `COOKIE_SECURE=1`).
+- Request thay đổi dữ liệu phải có header `x-tuban: 1` (chống CSRF). Socket.IO từ chối kết nối không có phiên hoặc đến từ trang web khác.
+- Đăng nhập sai 10 lần trong 15 phút thì tạm khoá. Không thể tự khoá, tự hạ quyền hay xoá admin cuối cùng.
+- Khoá tài khoản, đổi vai trò hoặc đổi mật khẩu thì các phiên đang mở của người đó bị đăng xuất ngay.
+- Lịch sử ghi lại ai giao task, ai duyệt lệnh, ai sửa cấu hình.
+- Không có `DATABASE_URL` thì tài khoản chỉ nằm trong bộ nhớ: tắt server là mất, lần sau phải tạo lại (hoặc dùng `ADMIN_USERNAME` / `ADMIN_PASSWORD`).
+
 ### Lưu dữ liệu vào Postgres
 
 Task, lịch sử hoạt động, yêu cầu duyệt và chỉ số token / chi phí của từng agent được lưu vào Postgres khi có biến `DATABASE_URL`. Bảng tự tạo lúc server khởi động (migration nằm trong `apps/server/src/db.ts`).
@@ -79,6 +101,9 @@ Server phục vụ luôn bản web đã build ở http://localhost:8787.
 | `CURSOR_AGENT_CMD` | `cursor-agent` | Lệnh chạy Cursor CLI |
 | `DEMO_SPEED` | `1` | Hệ số tốc độ kịch bản demo (nhỏ hơn = nhanh hơn) |
 | `PORT` | `8787` | Cổng server |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` |  | Tạo admin đầu tiên khi chưa có tài khoản nào |
+| `PUBLIC_URL` | `http://localhost:PORT` | Địa chỉ công khai của dashboard (link trong thông báo; https thì bật cookie `Secure`) |
+| `COOKIE_SECURE` | theo `PUBLIC_URL` | `1` để chỉ gửi cookie qua HTTPS |
 
 ## Các agent
 
@@ -174,4 +199,4 @@ Mọi provider đều phát ra cùng một kiểu `AgentEvent`. Mỗi event mang
 ## Lưu ý
 
 - Dashboard hiển thị 100 task và 200 event gần nhất. Lịch sử cũ hơn lấy qua API: `GET /api/tasks?limit=50&before=<ms>&agentId=<id>` và `GET /api/tasks/<id>/events`.
-- Dashboard **chưa có đăng nhập**: ai mở được trang đều giao việc, duyệt lệnh và sửa prompt của agent được. Đừng mở cổng ra Internet khi đang chạy chế độ Live.
+- Khi mở dashboard ra Internet, đặt server sau HTTPS (reverse proxy) và đặt `PUBLIC_URL` là địa chỉ https.

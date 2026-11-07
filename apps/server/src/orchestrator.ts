@@ -39,6 +39,12 @@ const PROVIDERS: Record<ProviderId, AgentProvider> = {
   mock: mockProvider,
 };
 
+/** The person behind an action (from the login session). */
+export interface Actor {
+  id: string;
+  name: string;
+}
+
 /** Who reviews, in order of preference (the first enabled agent that did not do the work). */
 const REVIEWERS = ["researcher", "writer"];
 const SETTING_LABELS: Record<keyof AgentSettings, string> = {
@@ -129,7 +135,7 @@ export class Orchestrator {
   }
 
   /** Apply an edit from the dashboard. Running tasks keep the old settings; the next task uses the new ones. */
-  async updateAgentSettings(id: string, patch: Partial<AgentSettings>): Promise<AgentConfigView> {
+  async updateAgentSettings(id: string, patch: Partial<AgentSettings>, actor?: Actor): Promise<AgentConfigView> {
     const current = this.configs.get(id);
     if (!current) throw new Error(`Không có agent "${id}"`);
     const known = new Set((await listSkills(() => [])).map((sk) => sk.name));
@@ -162,7 +168,8 @@ export class Orchestrator {
       agentId: id,
       type: "config",
       activity: busy ? this.agent(id).activity : "idle",
-      summary: `Cập nhật cấu hình: ${changed.map((k) => SETTING_LABELS[k]).join(", ")}${busy ? " (áp dụng từ task sau)" : ""}`,
+      summary: `${actor ? `${actor.name} cập nhật` : "Cập nhật"} cấu hình: ${changed.map((k) => SETTING_LABELS[k]).join(", ")}${busy ? " (áp dụng từ task sau)" : ""}`,
+      actor: actor?.name,
     });
     return this.agentConfigs().find((c) => c.id === id)!;
   }
@@ -173,29 +180,36 @@ export class Orchestrator {
   }
 
   /** After a skill is deleted from the library, take it off every agent. */
-  async forgetSkill(name: string) {
+  async forgetSkill(name: string, actor?: Actor) {
     for (const id of this.skillUsers(name)) {
       const c = this.configs.get(id)!;
-      await this.updateAgentSettings(id, { skills: c.skills.filter((s) => s !== name) });
+      await this.updateAgentSettings(id, { skills: c.skills.filter((s) => s !== name) }, actor);
     }
   }
 
-  resetAgentSettings(id: string) {
+  resetAgentSettings(id: string, actor?: Actor) {
     const defaults = ROSTER.find((r) => r.id === id);
     if (!defaults) throw new Error(`Không có agent "${id}"`);
-    return this.updateAgentSettings(id, pickSettings(defaults));
+    return this.updateAgentSettings(id, pickSettings(defaults), actor);
   }
 
   /** A request from the user. Without an explicit agent it goes to the Manager, who plans and delegates. */
-  createTask(input: CreateTaskInput): Task {
+  createTask(input: CreateTaskInput, actor?: Actor): Task {
     const prompt = input.prompt.trim();
     if (!prompt) throw new Error("Nội dung task trống");
     const agentId = input.agentId && this.configs.has(input.agentId) ? input.agentId : MANAGER_ID;
     if (!this.configs.get(agentId)!.enabled) throw new Error(`${this.configs.get(agentId)!.name} đang tắt`);
-    return this.enqueue({ agentId, prompt, title: clip(prompt, 60), kind: "task" });
+    return this.enqueue({ agentId, prompt, title: clip(prompt, 60), kind: "task", createdBy: actor });
   }
 
-  private enqueue(p: { agentId: string; prompt: string; title: string; kind: TaskKind; parentId?: string }): Task {
+  private enqueue(p: {
+    agentId: string;
+    prompt: string;
+    title: string;
+    kind: TaskKind;
+    parentId?: string;
+    createdBy?: Actor;
+  }): Task {
     const task: Task = {
       id: randomUUID(),
       title: p.title,
@@ -203,6 +217,8 @@ export class Orchestrator {
       agentId: p.agentId,
       parentId: p.parentId,
       kind: p.kind,
+      createdBy: p.createdBy?.name,
+      createdById: p.createdBy?.id,
       status: "queued",
       createdAt: Date.now(),
       usage: emptyUsage(),
@@ -214,9 +230,11 @@ export class Orchestrator {
   }
 
   /** Cancel a task and everything it delegated. */
-  cancel(taskId: string) {
+  cancel(taskId: string, actor?: Actor) {
     const task = this.store.tasks.get(taskId);
     if (!task) return;
+    if (actor && !task.parentId && !FINISHED(task))
+      this.store.addEvent({ agentId: task.agentId, taskId, type: "error", activity: "idle", summary: `${actor.name} huỷ: ${task.title}`, actor: actor.name });
     for (const child of this.children(taskId)) if (!FINISHED(child)) this.cancel(child.id);
     if (task.status === "queued") {
       const q = this.queues.get(task.agentId)!;
@@ -229,19 +247,20 @@ export class Orchestrator {
     }
   }
 
-  decide(approvalId: string, approve: boolean) {
+  decide(approvalId: string, approve: boolean, actor?: Actor) {
     const a = this.store.approvals.get(approvalId);
     const waiter = this.approvalWaiters.get(approvalId);
     if (!a || a.status !== "pending" || !waiter) return;
     this.approvalWaiters.delete(approvalId);
-    this.store.setApproval({ ...a, status: approve ? "approved" : "denied" });
+    this.store.setApproval({ ...a, status: approve ? "approved" : "denied", decidedBy: actor?.name });
     this.store.addEvent({
       agentId: a.agentId,
       taskId: a.taskId,
       type: "approval_resolved",
       activity: approve ? "code" : "thinking",
       tool: a.tool,
-      summary: `${approve ? "Đã duyệt" : "Từ chối"}: ${a.summary}`,
+      summary: `${approve ? "Đã duyệt" : "Từ chối"}${actor ? ` (${actor.name})` : ""}: ${a.summary}`,
+      actor: actor?.name,
     });
     waiter(approve);
   }
@@ -332,7 +351,14 @@ export class Orchestrator {
       ]
         .filter(Boolean)
         .join("\n\n");
-      const task = this.enqueue({ agentId, prompt, title: clip(instructions, 60), kind, parentId: root.id });
+      const task = this.enqueue({
+        agentId,
+        prompt,
+        title: clip(instructions, 60),
+        kind,
+        parentId: root.id,
+        createdBy: root.createdById ? { id: root.createdById, name: root.createdBy ?? "" } : undefined,
+      });
       this.store.addEvent({
         agentId: MANAGER_ID,
         taskId: root.id,

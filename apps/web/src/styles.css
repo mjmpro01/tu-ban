@@ -340,3 +340,41 @@ button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2p
 .skill-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
 .skill-checks label { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
 .skill-checks input { margin-top: 3px; accent-color: var(--accent); }
+
+/* ---------------------------------------------------------------- login & users */
+.splash { padding: 40px; text-align: center; }
+.login { min-height: 100vh; display: grid; place-items: center; padding: 16px; }
+.login-card { width: min(380px, 100%); display: flex; flex-direction: column; gap: 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 24px; }
+.login-card h1 { margin: 0; font-size: 22px; }
+.login-card p { margin: 0; }
+.login-card .primary { padding: 10px; }
+.user-menu { position: relative; }
+.user-menu summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 999px; font-size: 12px; }
+.user-menu summary::-webkit-details-marker { display: none; }
+.user-menu summary:focus-visible { outline: 2px solid var(--accent); }
+.user-menu-panel { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 200px; display: flex; flex-direction: column; gap: 2px; padding: 8px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.4); }
+.user-menu-panel button { background: none; border: 0; text-align: left; padding: 6px 8px; border-radius: 6px; font-size: 13px; }
+.user-menu-panel button:hover, .user-menu-panel button:focus-visible { background: var(--panel); }
+.user-menu-panel .muted { padding: 2px 8px 6px; }
+.role-badge { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 4px; }
+.role-admin { background: var(--accent); color: var(--accent-ink); }
+.role-member { border: 1px solid var(--muted); color: var(--muted); }
+.small-dialog { width: min(460px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--bg); color: var(--text); }
+.small-dialog.wide { width: min(860px, calc(100vw - 32px)); }
+.small-dialog::backdrop { background: rgb(10 6 4 / 0.7); }
+.small-dialog-body { padding: 16px; overflow-y: auto; max-height: calc(100vh - 110px); }
+.users-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.users-table th { text-align: left; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; padding: 6px; border-bottom: 1px solid var(--border); }
+.users-table td { padding: 8px 6px; border-bottom: 1px solid #3a2a20; vertical-align: top; }
+.users-table select { background: #1a110c; border: 1px solid var(--border); border-radius: 6px; padding: 4px; }
+.users-actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.add-user { margin-top: 16px; }
+.add-user h3 { margin: 0; font-size: 14px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (max-width: 760px) {
+  .users-table thead { display: none; }
+  .users-table tr { display: grid; grid-template-columns: 1fr auto; gap: 4px; padding: 8px 0; border-bottom: 1px solid #3a2a20; }
+  .users-table td { border: 0; padding: 2px 0; }
+  .users-table td:last-child { grid-column: 1 / -1; }
+  .users-actions { justify-content: flex-start; }
+}
