@@ -1,15 +1,29 @@
 import { randomUUID } from "node:crypto";
 import {
   ACTIVE_STATUSES,
+  type AgentConfigView,
   type AgentInfo,
+  type AgentSettings,
   type CreateTaskInput,
   type ProviderId,
   type Task,
   type TaskKind,
   type Usage,
   emptyUsage,
+  sameValue,
+  toolGroupOf,
 } from "@tu-ban/shared";
-import { type AgentConfig, ROSTER, toAgentInfo } from "./agents.ts";
+import { listSkills, skillExists } from "./skills.ts";
+import {
+  type AgentConfig,
+  MANAGER_ID,
+  ROSTER,
+  SETTINGS_KEYS,
+  managerTeamSection,
+  pickSettings,
+  toAgentInfo,
+  validateSettings,
+} from "./agents.ts";
 import { MAX_REVIEW_ROUNDS, MAX_SUBTASKS, MAX_TREE_BUDGET_USD, MODE, WORKDIR } from "./config.ts";
 import { claudeProvider } from "./providers/claude.ts";
 import { copilotProvider } from "./providers/copilot.ts";
@@ -25,9 +39,18 @@ const PROVIDERS: Record<ProviderId, AgentProvider> = {
   mock: mockProvider,
 };
 
-const MANAGER_ID = "manager";
-const REVIEWER_ID = "researcher";
-const FALLBACK_REVIEWER_ID = "writer";
+/** Who reviews, in order of preference (the first enabled agent that did not do the work). */
+const REVIEWERS = ["researcher", "writer"];
+const SETTING_LABELS: Record<keyof AgentSettings, string> = {
+  name: "tên",
+  role: "vai trò",
+  provider: "provider",
+  model: "model",
+  systemPrompt: "system prompt",
+  enabled: "bật/tắt",
+  skills: "skill",
+  tools: "quyền công cụ",
+};
 /** How much of an earlier result is copied into a follow-up sub-task. */
 const CONTEXT_CHARS = 6000;
 
@@ -52,16 +75,17 @@ export class Orchestrator {
   constructor(private store: Store) {}
 
   async init() {
-    for (const c of ROSTER) {
+    const overrides = (await this.store.db?.loadAgentSettings()) ?? {};
+    for (const base of ROSTER) {
+      let c = base;
+      try {
+        c = { ...base, ...validateSettings(base.id, overrides[base.id] ?? {}) };
+      } catch (e) {
+        console.warn(`[${base.id}] bỏ qua cấu hình đã lưu không hợp lệ: ${(e as Error).message}`);
+      }
       this.configs.set(c.id, c);
       this.queues.set(c.id, []);
-      let runtime: ProviderId = "mock";
-      if (MODE === "live") {
-        const check = await PROVIDERS[c.provider].available();
-        if (check.ok) runtime = c.provider;
-        else console.warn(`[${c.id}] ${c.provider} không dùng được: ${check.reason} → chạy demo`);
-      }
-      this.store.setAgent(toAgentInfo(c, runtime));
+      this.store.setAgent(toAgentInfo(c, await this.resolveRuntime(c)));
     }
     const saved = await this.store.db?.load();
     if (saved) {
@@ -71,11 +95,103 @@ export class Orchestrator {
     console.log(`Mode: ${MODE}. Agents: ${[...this.store.agents.values()].map((a) => `${a.id}=${a.runtime}`).join(", ")}`);
   }
 
+  /** Which provider an agent really runs on (demo mode, or a provider that is not set up, falls back to mock). */
+  private runtimeNotes = new Map<string, string>();
+  private async resolveRuntime(c: AgentConfig): Promise<ProviderId> {
+    this.runtimeNotes.delete(c.id);
+    if (MODE !== "live") return "mock";
+    const check = await PROVIDERS[c.provider].available();
+    if (check.ok) return c.provider;
+    const note = `${c.provider} không dùng được: ${check.reason}. Agent chạy bằng kịch bản demo.`;
+    this.runtimeNotes.set(c.id, note);
+    console.warn(`[${c.id}] ${note}`);
+    return "mock";
+  }
+
+  // ---------------------------------------------------------------- agent settings
+  agentConfigs(): AgentConfigView[] {
+    const all = [...this.configs.values()];
+    return all.map((c) => {
+      const defaults = pickSettings(ROSTER.find((r) => r.id === c.id)!);
+      const current = pickSettings(c);
+      return {
+        ...current,
+        id: c.id,
+        character: c.character,
+        desk: c.desk,
+        defaults,
+        isDefault: SETTINGS_KEYS.every((k) => sameValue(current[k], defaults[k])),
+        generatedPrompt: c.id === MANAGER_ID ? managerTeamSection(all) : undefined,
+        required: c.id === MANAGER_ID,
+        runtimeNote: this.runtimeNotes.get(c.id),
+      };
+    });
+  }
+
+  /** Apply an edit from the dashboard. Running tasks keep the old settings; the next task uses the new ones. */
+  async updateAgentSettings(id: string, patch: Partial<AgentSettings>): Promise<AgentConfigView> {
+    const current = this.configs.get(id);
+    if (!current) throw new Error(`Không có agent "${id}"`);
+    const known = new Set((await listSkills(() => [])).map((sk) => sk.name));
+    const clean = validateSettings(id, patch, known);
+    const next: AgentConfig = { ...current, ...clean };
+    const changed = SETTINGS_KEYS.filter((k) => !sameValue(next[k], current[k]));
+    if (!changed.length) return this.agentConfigs().find((c) => c.id === id)!;
+
+    // store only what differs from the defaults
+    const defaults = pickSettings(ROSTER.find((r) => r.id === id)!);
+    const diff = Object.fromEntries(SETTINGS_KEYS.filter((k) => !sameValue(next[k], defaults[k])).map((k) => [k, next[k]]));
+    if (this.store.db) {
+      if (Object.keys(diff).length) await this.store.db.saveAgentSettings(id, diff);
+      else await this.store.db.deleteAgentSettings(id);
+    }
+    this.configs.set(id, next);
+
+    const runtime = changed.includes("provider") ? await this.resolveRuntime(next) : this.agent(id).runtime;
+    const busy = this.running.has(id);
+    this.store.patchAgent(id, {
+      name: next.name,
+      role: next.role,
+      provider: next.provider,
+      runtime,
+      model: runtime === "claude" ? next.model : undefined,
+      enabled: next.enabled,
+      ...(busy ? {} : { status: "idle", activity: "idle", summary: next.enabled ? "Đang rảnh" : "Đã tắt" }),
+    });
+    this.store.addEvent({
+      agentId: id,
+      type: "config",
+      activity: busy ? this.agent(id).activity : "idle",
+      summary: `Cập nhật cấu hình: ${changed.map((k) => SETTING_LABELS[k]).join(", ")}${busy ? " (áp dụng từ task sau)" : ""}`,
+    });
+    return this.agentConfigs().find((c) => c.id === id)!;
+  }
+
+  /** Agents that have a skill enabled (for the skill library). */
+  skillUsers(name: string) {
+    return [...this.configs.values()].filter((c) => c.skills.includes(name)).map((c) => c.id);
+  }
+
+  /** After a skill is deleted from the library, take it off every agent. */
+  async forgetSkill(name: string) {
+    for (const id of this.skillUsers(name)) {
+      const c = this.configs.get(id)!;
+      await this.updateAgentSettings(id, { skills: c.skills.filter((s) => s !== name) });
+    }
+  }
+
+  resetAgentSettings(id: string) {
+    const defaults = ROSTER.find((r) => r.id === id);
+    if (!defaults) throw new Error(`Không có agent "${id}"`);
+    return this.updateAgentSettings(id, pickSettings(defaults));
+  }
+
   /** A request from the user. Without an explicit agent it goes to the Manager, who plans and delegates. */
   createTask(input: CreateTaskInput): Task {
     const prompt = input.prompt.trim();
     if (!prompt) throw new Error("Nội dung task trống");
     const agentId = input.agentId && this.configs.has(input.agentId) ? input.agentId : MANAGER_ID;
+    if (!this.configs.get(agentId)!.enabled) throw new Error(`${this.configs.get(agentId)!.name} đang tắt`);
     return this.enqueue({ agentId, prompt, title: clip(prompt, 60), kind: "task" });
   }
 
@@ -201,8 +317,11 @@ export class Orchestrator {
         .join("\n\n");
 
     const delegate = (agentId: string, instructions: string, contextTaskIds?: string[], kind: TaskKind = "task") => {
-      if (!this.configs.has(agentId) || agentId === MANAGER_ID)
-        throw new Error(`Unknown team member "${agentId}". Use one of: ${[...this.configs.keys()].filter((k) => k !== MANAGER_ID).join(", ")}`);
+      const member = this.configs.get(agentId);
+      if (!member || agentId === MANAGER_ID || !member.enabled) {
+        const ids = [...this.configs.values()].filter((c) => c.enabled && c.id !== MANAGER_ID).map((c) => c.id);
+        throw new Error(`"${agentId}" is not an available team member. Available: ${ids.join(", ") || "nobody"}`);
+      }
       checkLimits();
       const context = contextBlock(contextTaskIds);
       const prompt = [
@@ -249,7 +368,7 @@ export class Orchestrator {
     return {
       members: () =>
         [...this.configs.values()]
-          .filter((c) => c.id !== MANAGER_ID)
+          .filter((c) => c.id !== MANAGER_ID && c.enabled)
           .map((c) => ({ id: c.id, name: c.name, role: c.role, busy: this.running.has(c.id) })),
       delegate: (agentId, instructions, contextTaskIds) => delegate(agentId, instructions, contextTaskIds),
       waitFor,
@@ -259,7 +378,10 @@ export class Orchestrator {
         const rounds = this.treeTasks(root).filter((t) => t.kind === "review").length;
         if (rounds >= MAX_REVIEW_ROUNDS) throw new Error(`Limit reached: at most ${MAX_REVIEW_ROUNDS} reviews per request`);
         await this.waitTask(taskId);
-        const reviewer = target.agentId === REVIEWER_ID ? FALLBACK_REVIEWER_ID : REVIEWER_ID;
+        const reviewer = [...REVIEWERS, ...this.configs.keys()].find(
+          (id) => id !== MANAGER_ID && id !== target.agentId && this.configs.get(id)?.enabled,
+        );
+        if (!reviewer) throw new Error("No enabled team member can review this task");
         const instructions = [
           `Review công việc của ${name(target.agentId)} cho việc: "${target.title}".`,
           focus && `Tập trung vào: ${focus}`,
@@ -341,10 +463,19 @@ export class Orchestrator {
     const team = agent.id === MANAGER_ID && !task.parentId ? this.makeTeam(task, emit, controller.signal) : undefined;
 
     try {
+      const skills = (await Promise.all(config.skills.map(async (n) => ((await skillExists(n)) ? n : undefined)))).filter(
+        (n): n is string => !!n,
+      );
+      const toolMode = (tool: string) => {
+        const group = toolGroupOf(tool);
+        return group ? config.tools[group] : "ask";
+      };
       const { result, usage } = await provider.run({
         task,
         agent,
-        config,
+        skills,
+        toolMode,
+        config: team ? { ...config, systemPrompt: `${config.systemPrompt}\n\n${managerTeamSection([...this.configs.values()])}` } : config,
         workdir: WORKDIR,
         signal: controller.signal,
         emit,

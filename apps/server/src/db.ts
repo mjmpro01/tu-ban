@@ -1,4 +1,12 @@
-import { ACTIVE_STATUSES, type AgentEvent, type Approval, type Task, type TaskQuery, type Usage } from "@tu-ban/shared";
+import {
+  ACTIVE_STATUSES,
+  type AgentEvent,
+  type AgentSettings,
+  type Approval,
+  type Task,
+  type TaskQuery,
+  type Usage,
+} from "@tu-ban/shared";
 import pg from "pg";
 
 /** What the store needs from a database. The office runs without one (in-memory only). */
@@ -10,6 +18,10 @@ export interface Persistence {
   saveAgentStats(agentId: string, usage: Usage, requests: number): void;
   taskEvents(taskId: string): Promise<AgentEvent[]>;
   getTask(id: string): Promise<Task | undefined>;
+  /** Settings edited in the dashboard, by agent id (only agents that differ from the defaults). */
+  loadAgentSettings(): Promise<Record<string, Partial<AgentSettings>>>;
+  saveAgentSettings(agentId: string, settings: Partial<AgentSettings>): Promise<void>;
+  deleteAgentSettings(agentId: string): Promise<void>;
   listTasks(query: TaskQuery & { limit: number }): Promise<Task[]>;
   /** Wait for queued writes, then close the pool. */
   close(): Promise<void>;
@@ -91,6 +103,13 @@ const MIGRATIONS: string[] = [
   ALTER TABLE tasks ADD COLUMN kind text NOT NULL DEFAULT 'task';
   CREATE INDEX tasks_parent_idx ON tasks (parent_id, created_at);
   ALTER TABLE events ADD COLUMN participants text[];
+  `,
+  `
+  CREATE TABLE agent_settings (
+    agent_id    text PRIMARY KEY,
+    settings    jsonb NOT NULL,
+    updated_at  timestamptz NOT NULL DEFAULT now()
+  );
   `,
 ];
 
@@ -265,6 +284,25 @@ export class PgPersistence implements Persistence {
     if (!/^[0-9a-f-]{36}$/i.test(taskId)) return [];
     const { rows } = await this.pool.query(`SELECT * FROM events WHERE task_id = $1 ORDER BY ts`, [taskId]);
     return rows.map(toEvent);
+  }
+
+  async loadAgentSettings() {
+    const { rows } = await this.pool.query(`SELECT agent_id, settings FROM agent_settings`);
+    return Object.fromEntries(rows.map((r) => [r.agent_id, r.settings as Partial<AgentSettings>]));
+  }
+
+  async saveAgentSettings(agentId: string, settings: Partial<AgentSettings>) {
+    await this.queue;
+    await this.pool.query(
+      `INSERT INTO agent_settings (agent_id, settings, updated_at) VALUES ($1, $2, now())
+       ON CONFLICT (agent_id) DO UPDATE SET settings = EXCLUDED.settings, updated_at = now()`,
+      [agentId, JSON.stringify(settings)],
+    );
+  }
+
+  async deleteAgentSettings(agentId: string) {
+    await this.queue;
+    await this.pool.query(`DELETE FROM agent_settings WHERE agent_id = $1`, [agentId]);
   }
 
   async getTask(id: string) {

@@ -4,8 +4,7 @@ import { type AgentProvider, type RunContext, type RunResult, type TeamApi, clip
 type Step =
   | { kind: "think"; ms: number }
   | { kind: "tool"; tool: string; input: string; ms: number }
-  | { kind: "say"; text: string; ms: number }
-  | { kind: "approve"; tool: string; input: string };
+  | { kind: "say"; text: string; ms: number };
 
 /** Scripted, cost-free runs so the office can be demoed without any API keys. */
 function script(agentId: string, prompt: string, kind: string): Step[] {
@@ -30,7 +29,6 @@ function script(agentId: string, prompt: string, kind: string): Step[] {
       return [
         { kind: "think", ms: 2000 },
         { kind: "say", text: "Lên dàn ý 4 phần…", ms: 3000 },
-        { kind: "approve", tool: "Write", input: "bao-cao.md" },
         { kind: "tool", tool: "Write", input: "bao-cao.md", ms: 5000 },
         { kind: "say", text: "Đang rà soát văn phong…", ms: 3000 },
       ];
@@ -40,7 +38,6 @@ function script(agentId: string, prompt: string, kind: string): Step[] {
         { kind: "tool", tool: "Grep", input: "function handle", ms: 2500 },
         { kind: "tool", tool: "Read", input: "src/app.ts", ms: 2500 },
         { kind: "tool", tool: "Edit", input: "src/app.ts", ms: 4000 },
-        { kind: "approve", tool: "Bash", input: "npm test" },
         { kind: "tool", tool: "Bash", input: "npm test", ms: 5000 },
       ];
     case "copilot":
@@ -68,6 +65,11 @@ export const mockProvider: AgentProvider = {
 
   async run(ctx: RunContext): Promise<RunResult> {
     const wait = (ms: number) => sleep(ms * DEMO_SPEED * (0.8 + Math.random() * 0.4), ctx.signal);
+    if (ctx.skills.length) {
+      ctx.emit({ type: "tool_start", activity: "search", tool: "Skill", summary: `Dùng skill: ${ctx.skills.join(", ")}` });
+      await wait(1500);
+      ctx.emit({ type: "tool_end", activity: "thinking", tool: "Skill", summary: "Đã đọc hướng dẫn trong skill" });
+    }
     if (ctx.team) return managerPlan(ctx, ctx.team, wait);
     let tokensOut = 0;
     for (const step of script(ctx.agent.id, ctx.task.title, ctx.task.kind)) {
@@ -80,6 +82,21 @@ export const mockProvider: AgentProvider = {
         await wait(step.ms);
       } else if (step.kind === "tool") {
         const remote = step.tool === "remote";
+        // follow the agent's tool permissions, like the real provider does
+        const mode = remote ? "auto" : ctx.toolMode(step.tool);
+        if (mode === "off") {
+          ctx.emit({ type: "message", activity: "write", summary: `Không có quyền dùng ${step.tool}, bỏ qua bước này` });
+          await wait(1500);
+          continue;
+        }
+        if (mode === "ask") {
+          const ok = await ctx.requestApproval(step.tool, `${step.tool}: ${step.input}`, { input: step.input });
+          if (!ok) {
+            ctx.emit({ type: "message", activity: "write", summary: "Bị từ chối, chuyển sang cách khác…" });
+            await wait(2000);
+            continue;
+          }
+        }
         ctx.emit({
           type: "tool_start",
           activity: remote ? "remote" : step.tool.match(/Search|Fetch|Read|Grep/) ? "search" : "code",
@@ -88,12 +105,6 @@ export const mockProvider: AgentProvider = {
         });
         await wait(step.ms);
         ctx.emit({ type: "tool_end", activity: remote ? "remote" : "thinking", tool: step.tool, summary: `${step.tool} xong` });
-      } else if (step.kind === "approve") {
-        const ok = await ctx.requestApproval(step.tool, `${step.tool}: ${step.input}`, { input: step.input });
-        if (!ok) {
-          ctx.emit({ type: "message", activity: "write", summary: "Bị từ chối, chuyển sang cách khác…" });
-          await wait(2000);
-        }
       }
     }
     const result =
@@ -122,32 +133,43 @@ async function managerPlan(ctx: RunContext, team: TeamApi, wait: (ms: number) =>
   await wait(2500);
 
   const lines: string[] = [];
-  if (/(github|issue|pull request|\bpr\b|code|bug|refactor|sửa lỗi|lập trình|hàm|test)/.test(p)) {
-    const onGithub = /(github|issue|pull request|\bpr\b)/.test(p);
-    const dev = onGithub ? "copilot" : "cursor";
-    say(`Kế hoạch: ${onGithub ? "Dev Copilot" : "Dev Cursor"} xử lý, Researcher review.`);
+  const members = team.members();
+  const has = (id: string) => members.some((m) => m.id === id);
+  const label = (id: string) => members.find((m) => m.id === id)?.name ?? id;
+  const isCode = /(github|issue|pull request|\bpr\b|code|bug|refactor|sửa lỗi|lập trình|hàm|test)/.test(p);
+  const onGithub = /(github|issue|pull request|\bpr\b)/.test(p);
+  const dev = onGithub && has("copilot") ? "copilot" : has("cursor") ? "cursor" : has("copilot") ? "copilot" : undefined;
+
+  if (!members.length) {
+    say("Cả nhóm đang tắt, Manager tự làm.");
+    await wait(4000);
+    lines.push("- Manager tự xử lý (không có thành viên nào đang bật).");
+  } else if (isCode && dev) {
+    say(`Kế hoạch: ${label(dev)} xử lý, rồi nhờ review.`);
     await wait(1500);
     let work = team.delegate(dev, `Thực hiện: ${topic}`);
     await team.waitFor([work]);
-    let review = await team.review(work, "tính đúng đắn và test");
-    if (!review.approved) {
+    let review = await team.review(work, "tính đúng đắn và test").catch(() => undefined);
+    if (review && !review.approved) {
       say("Review yêu cầu sửa, giao lại kèm góp ý.");
       work = team.delegate(dev, `Sửa theo góp ý review: ${clip(review.feedback, 120)}`, [work, review.reviewTaskId]);
       await team.waitFor([work]);
-      review = await team.review(work);
+      review = await team.review(work).catch(() => undefined);
     }
-    lines.push(`- ${onGithub ? "Dev Copilot" : "Dev Cursor"} đã thực hiện thay đổi.`, `- Review: ${review.approved ? "đã duyệt" : "còn góp ý chưa xử lý"}.`);
+    lines.push(`- ${label(dev)} đã thực hiện thay đổi.`, `- Review: ${!review ? "không có ai review" : review.approved ? "đã duyệt" : "còn góp ý chưa xử lý"}.`);
   } else {
-    say("Kế hoạch: Researcher thu thập thông tin, Writer lập dàn ý, rồi Writer viết bản hoàn chỉnh.");
+    const researcher = has("researcher") ? "researcher" : members[0].id;
+    const writer = has("writer") ? "writer" : members[members.length - 1].id;
+    say(`Kế hoạch: ${label(researcher)} thu thập thông tin, ${label(writer)} lập dàn ý, rồi viết bản hoàn chỉnh.`);
     await wait(1500);
-    const research = team.delegate("researcher", `Thu thập thông tin và số liệu về: ${topic}`);
-    const outline = team.delegate("writer", `Lập dàn ý cho: ${topic}`);
+    const research = team.delegate(researcher, `Thu thập thông tin và số liệu về: ${topic}`);
+    const outline = team.delegate(writer, `Lập dàn ý cho: ${topic}`);
     const first = await team.waitFor([research, outline]);
     ctx.emit({ type: "thinking", activity: "thinking", summary: "Họp: tổng hợp tài liệu và dàn ý…" });
     await wait(6000);
-    const draft = team.delegate("writer", "Viết bản hoàn chỉnh dựa trên tài liệu và dàn ý đã có", [research, outline]);
+    const draft = team.delegate(writer, "Viết bản hoàn chỉnh dựa trên tài liệu và dàn ý đã có", [research, outline]);
     const [final] = await team.waitFor([draft]);
-    lines.push(...first.map((r) => `- ${r.agentId}: ${r.status === "done" ? "xong" : "lỗi"}`), `- Bản hoàn chỉnh: ${final.status === "done" ? "xong" : "lỗi"}`);
+    lines.push(...first.map((r) => `- ${label(r.agentId)}: ${r.status === "done" ? "xong" : "lỗi"}`), `- Bản hoàn chỉnh: ${final.status === "done" ? "xong" : "lỗi"}`);
   }
   ctx.emit({ type: "thinking", activity: "thinking", summary: "Viết tổng kết cho người dùng…" });
   await wait(2000);

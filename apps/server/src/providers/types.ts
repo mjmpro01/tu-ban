@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentInfo, Task, Usage } from "@tu-ban/shared";
+import type { AgentEvent, AgentInfo, Task, ToolMode, Usage } from "@tu-ban/shared";
 import type { AgentConfig } from "../agents.ts";
 
 export type EmitInput = Omit<AgentEvent, "id" | "ts" | "agentId" | "taskId">;
@@ -42,6 +42,10 @@ export interface RunContext {
   emit(event: EmitInput): void;
   /** Present only when the Manager works on a request from the user. */
   team?: TeamApi;
+  /** What this agent may do with a tool (from its tool permissions; unknown tools are "ask"). */
+  toolMode(tool: string): ToolMode;
+  /** Skills from the library this agent may use (only ones that still exist). */
+  skills: string[];
   /** Ask the human to approve a risky action. Resolves true when approved. */
   requestApproval(tool: string, summary: string, input: unknown): Promise<boolean>;
 }

@@ -90,19 +90,46 @@ export class AgentSprite {
 
     this.sitAt(agent.desk, "doze");
     this.apply(true);
+    if (!agent.enabled) this.setPresent(false);
   }
 
   // ---------------------------------------------------------------- public
   update(agent: AgentInfo) {
     const prev = this.agent;
     this.agent = agent;
+    if (prev.name !== agent.name) this.label.setText(agent.name);
+    if (prev.enabled !== agent.enabled) return this.setPresent(agent.enabled);
+    if (!agent.enabled) return;
     if (prev.status !== agent.status || prev.activity !== agent.activity || prev.summary !== agent.summary) this.apply();
+  }
+
+  /** A disabled agent leaves the office; enabling it again puts it back at its desk. */
+  private setPresent(on: boolean) {
+    this.walkToken++;
+    this.scene.tweens.killTweensOf(this.sprite);
+    this.walking = false;
+    this.override = undefined;
+    this.queuedOverride = undefined;
+    this.overrideTimer?.remove();
+    this.pendingTimer?.remove();
+    this.pendingTimer = undefined;
+    this.sprite.setVisible(on);
+    if (!on) {
+      [this.emote, this.bubble, this.label, this.marker].forEach((o) => o.setVisible(false));
+      this.placeKey = "";
+      return;
+    }
+    this.label.setVisible(this.selected);
+    this.marker.setVisible(this.selected);
+    this.placeKey = "";
+    this.sitAt(this.agent.desk, "doze");
+    this.apply(true);
   }
 
   setSelected(on: boolean) {
     this.selected = on;
-    this.marker.setVisible(on);
-    this.label.setVisible(on);
+    this.marker.setVisible(on && this.agent.enabled);
+    this.label.setVisible(on && this.agent.enabled);
   }
 
   /** Walk to another agent's desk to hand work over (or bring results back), then carry on. */
@@ -124,6 +151,7 @@ export class AgentSprite {
    * a visit requested during a meeting waits until the meeting ends.
    */
   private setOverride(b: Behaviour, ms: number, priority: number) {
+    if (!this.agent.enabled) return;
     if (this.override && this.overridePriority > priority) {
       this.queuedOverride = { b, ms, priority };
       return;
@@ -207,6 +235,7 @@ export class AgentSprite {
    * place is rate-limited so quick tool calls don't make agents run back and forth.
    */
   private apply(force = false) {
+    if (!this.agent.enabled) return;
     if (this.agent.activity !== "idle") {
       this.idleTimer?.remove();
       this.idleTimer = undefined;
