@@ -1,0 +1,21 @@
+# Local Postgres for the AI office.
+#   docker compose up -d
+#   DATABASE_URL=postgres://tuban:tuban@localhost:5432/tuban npm run dev
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: tuban
+      POSTGRES_PASSWORD: tuban
+      POSTGRES_DB: tuban
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tuban"]
+      interval: 5s
+      retries: 10
+
+volumes:
+  pgdata:
