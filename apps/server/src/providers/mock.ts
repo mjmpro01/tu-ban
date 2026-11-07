@@ -4,8 +4,7 @@ import { type AgentProvider, type RunContext, type RunResult, type TeamApi, clip
 type Step =
   | { kind: "think"; ms: number }
   | { kind: "tool"; tool: string; input: string; ms: number }
-  | { kind: "say"; text: string; ms: number }
-  | { kind: "approve"; tool: string; input: string };
+  | { kind: "say"; text: string; ms: number };
 
 /** Scripted, cost-free runs so the office can be demoed without any API keys. */
 function script(agentId: string, prompt: string, kind: string): Step[] {
@@ -30,7 +29,6 @@ function script(agentId: string, prompt: string, kind: string): Step[] {
       return [
         { kind: "think", ms: 2000 },
         { kind: "say", text: "Lên dàn ý 4 phần…", ms: 3000 },
-        { kind: "approve", tool: "Write", input: "bao-cao.md" },
         { kind: "tool", tool: "Write", input: "bao-cao.md", ms: 5000 },
         { kind: "say", text: "Đang rà soát văn phong…", ms: 3000 },
       ];
@@ -40,7 +38,6 @@ function script(agentId: string, prompt: string, kind: string): Step[] {
         { kind: "tool", tool: "Grep", input: "function handle", ms: 2500 },
         { kind: "tool", tool: "Read", input: "src/app.ts", ms: 2500 },
         { kind: "tool", tool: "Edit", input: "src/app.ts", ms: 4000 },
-        { kind: "approve", tool: "Bash", input: "npm test" },
         { kind: "tool", tool: "Bash", input: "npm test", ms: 5000 },
       ];
     case "copilot":
@@ -68,6 +65,11 @@ export const mockProvider: AgentProvider = {
 
   async run(ctx: RunContext): Promise<RunResult> {
     const wait = (ms: number) => sleep(ms * DEMO_SPEED * (0.8 + Math.random() * 0.4), ctx.signal);
+    if (ctx.skills.length) {
+      ctx.emit({ type: "tool_start", activity: "search", tool: "Skill", summary: `Dùng skill: ${ctx.skills.join(", ")}` });
+      await wait(1500);
+      ctx.emit({ type: "tool_end", activity: "thinking", tool: "Skill", summary: "Đã đọc hướng dẫn trong skill" });
+    }
     if (ctx.team) return managerPlan(ctx, ctx.team, wait);
     let tokensOut = 0;
     for (const step of script(ctx.agent.id, ctx.task.title, ctx.task.kind)) {
@@ -80,6 +82,21 @@ export const mockProvider: AgentProvider = {
         await wait(step.ms);
       } else if (step.kind === "tool") {
         const remote = step.tool === "remote";
+        // follow the agent's tool permissions, like the real provider does
+        const mode = remote ? "auto" : ctx.toolMode(step.tool);
+        if (mode === "off") {
+          ctx.emit({ type: "message", activity: "write", summary: `Không có quyền dùng ${step.tool}, bỏ qua bước này` });
+          await wait(1500);
+          continue;
+        }
+        if (mode === "ask") {
+          const ok = await ctx.requestApproval(step.tool, `${step.tool}: ${step.input}`, { input: step.input });
+          if (!ok) {
+            ctx.emit({ type: "message", activity: "write", summary: "Bị từ chối, chuyển sang cách khác…" });
+            await wait(2000);
+            continue;
+          }
+        }
         ctx.emit({
           type: "tool_start",
           activity: remote ? "remote" : step.tool.match(/Search|Fetch|Read|Grep/) ? "search" : "code",
@@ -88,12 +105,6 @@ export const mockProvider: AgentProvider = {
         });
         await wait(step.ms);
         ctx.emit({ type: "tool_end", activity: remote ? "remote" : "thinking", tool: step.tool, summary: `${step.tool} xong` });
-      } else if (step.kind === "approve") {
-        const ok = await ctx.requestApproval(step.tool, `${step.tool}: ${step.input}`, { input: step.input });
-        if (!ok) {
-          ctx.emit({ type: "message", activity: "write", summary: "Bị từ chối, chuyển sang cách khác…" });
-          await wait(2000);
-        }
       }
     }
     const result =

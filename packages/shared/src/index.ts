@@ -54,6 +54,44 @@ export const CLAUDE_MODELS = [
   { id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
 ] as const;
 
+/** How an agent may use a group of tools: not at all, after the human approves, or on its own. */
+export type ToolMode = "off" | "ask" | "auto";
+
+/** Built-in Claude Agent SDK tools, grouped the way they are shown in the agent settings. */
+export const TOOL_GROUPS = [
+  { id: "read", label: "Đọc file", description: "Đọc và tìm trong file của thư mục làm việc", tools: ["Read", "Glob", "Grep", "LS", "NotebookRead"] },
+  { id: "web", label: "Tìm trên web", description: "Tìm kiếm và đọc trang web", tools: ["WebSearch", "WebFetch"] },
+  { id: "write", label: "Ghi / sửa file", description: "Tạo, ghi đè và sửa file", tools: ["Write", "Edit", "MultiEdit", "NotebookEdit"] },
+  { id: "shell", label: "Chạy lệnh", description: "Chạy lệnh terminal (cài đặt, test, git…)", tools: ["Bash", "BashOutput", "KillShell", "KillBash"] },
+] as const;
+
+export type ToolGroupId = (typeof TOOL_GROUPS)[number]["id"];
+export type ToolPolicy = Record<ToolGroupId, ToolMode>;
+
+export const DEFAULT_TOOL_POLICY: ToolPolicy = { read: "auto", web: "auto", write: "ask", shell: "ask" };
+
+/** Which settings group a tool belongs to (undefined = not configurable, e.g. internal or team tools). */
+export function toolGroupOf(tool: string): ToolGroupId | undefined {
+  return TOOL_GROUPS.find((g) => (g.tools as readonly string[]).includes(tool))?.id;
+}
+
+/** A skill in the shared library (workspace/.claude/skills/<name>/SKILL.md). */
+export interface SkillSummary {
+  name: string;
+  description: string;
+  /** Other files in the skill folder (scripts, templates…), relative paths. */
+  files: string[];
+  /** Agents that have this skill enabled. */
+  usedBy: string[];
+}
+
+export interface SkillDetail extends SkillSummary {
+  /** SKILL.md content after the front matter. */
+  body: string;
+}
+
+export const SKILL_NAME_PATTERN = "^[a-z0-9][a-z0-9-]{0,63}$";
+
 /** The editable part of an agent's configuration. */
 export interface AgentSettings {
   name: string;
@@ -63,7 +101,14 @@ export interface AgentSettings {
   model: string;
   systemPrompt: string;
   enabled: boolean;
+  /** Skills from the shared library this agent may use (Claude agents only). */
+  skills: string[];
+  /** Tool permissions per group (Claude agents only). */
+  tools: ToolPolicy;
 }
+
+/** Settings are compared by value (they hold arrays and objects). */
+export const sameValue = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 export interface AgentConfigView extends AgentSettings {
   id: string;
@@ -211,7 +256,7 @@ export interface ClientToServer {
 /** Map a tool name (Claude Agent SDK / Cursor / Copilot) to a visible activity. */
 export function toolActivity(tool: string): Activity {
   const t = tool.toLowerCase();
-  if (/(search|fetch|read|grep|glob|ls|find|view|browse)/.test(t)) return "search";
+  if (/(search|fetch|read|grep|glob|ls|find|view|browse|skill)/.test(t)) return "search";
   if (/(bash|shell|terminal|run|exec|edit|write|patch|notebook|commit|git)/.test(t)) return "code";
   if (/(task|agent|delegate)/.test(t)) return "handoff";
   return "code";

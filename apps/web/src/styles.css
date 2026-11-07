@@ -318,3 +318,25 @@ button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2p
 .success { color: var(--ok); font-size: 13px; margin: 0; }
 .generated pre { white-space: pre-wrap; }
 .history-list { display: flex; flex-direction: column; }
+
+/* ---------------------------------------------------------------- skills & tool permissions */
+.settings-tabs { margin-bottom: 10px; }
+.new-skill { width: 100%; margin-bottom: 8px; }
+.skill-desc { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.settings-group { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.settings-group legend { padding: 0 4px; font-size: 13px; font-weight: 700; color: var(--muted); }
+.settings-group > p { margin: 0; font-size: 12px; }
+.tool-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 4px 0; border-top: 1px solid #3a2a20; }
+.tool-row-label { display: flex; flex-direction: column; font-size: 13px; min-width: 0; }
+.tool-row-label .muted { font-size: 11px; }
+.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; flex: none; }
+.seg { position: relative; padding: 4px 10px; font-size: 12px; cursor: pointer; color: var(--muted); }
+.seg + .seg { border-left: 1px solid var(--border); }
+.seg input { position: absolute; opacity: 0; inset: 0; cursor: pointer; }
+.seg:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+.seg.on.seg-off { background: #4a3426; color: var(--text); }
+.seg.on.seg-ask { background: var(--warn); color: var(--accent-ink); font-weight: 700; }
+.seg.on.seg-auto { background: var(--ok); color: var(--accent-ink); font-weight: 700; }
+.skill-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.skill-checks label { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
+.skill-checks input { margin-top: 3px; accent-color: var(--accent); }

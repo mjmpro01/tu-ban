@@ -50,8 +50,7 @@ npm run dev
 
 Các agent Claude (Manager, Researcher, Writer) chạy bằng **Claude Agent SDK**, có sẵn công cụ đọc/ghi file, chạy lệnh, tìm kiếm web. Agent làm việc trong thư mục `workspace/` (đổi bằng biến `TU_BAN_WORKDIR`).
 
-- Công cụ chỉ đọc (Read, Grep, Glob, WebSearch, WebFetch) chạy luôn, không cần hỏi.
-- Mọi công cụ khác (Bash, Write, Edit…) phải được **bạn duyệt** trên dashboard trước khi chạy.
+- Mặc định, công cụ đọc file và tìm web chạy luôn; ghi file và chạy lệnh phải được **bạn duyệt** trên dashboard. Đổi cho từng agent trong **Quản lý agent → Quyền dùng công cụ**.
 - Mỗi task bị giới hạn bởi `MAX_BUDGET_USD` (mặc định $1) và `MAX_TURNS` (mặc định 30).
 
 ### Chạy production (một tiến trình)
@@ -84,9 +83,34 @@ Server phục vụ luôn bản web đã build ở http://localhost:8787.
 ## Các agent
 
 Bấm **Quản lý agent** trên dashboard để sửa từng agent mà không cần sửa code hay khởi động lại server:
-- Tên hiển thị, vai trò, provider (Claude / Cursor / Copilot), model Claude (chọn trong danh sách hoặc nhập model id khác), system prompt.
+- Tên hiển thị, vai trò, provider (Claude / Cursor / Copilot), model Claude (chọn trong danh sách hoặc nhập model id khác), system prompt, quyền dùng công cụ và skill.
 - Bật/tắt agent. Agent tắt không nhận việc mới (kể cả từ Manager) và rời khỏi văn phòng; việc đang làm vẫn chạy nốt. Manager luôn bật.
 - **Khôi phục mặc định** từng agent.
+
+### Quyền dùng công cụ (agent Claude)
+
+Mỗi agent có 4 nhóm công cụ, mỗi nhóm chọn **Tắt / Hỏi trước / Tự chạy**:
+
+| Nhóm | Công cụ | Mặc định |
+|---|---|---|
+| Đọc file | Read, Glob, Grep… | Tự chạy |
+| Tìm trên web | WebSearch, WebFetch | Tự chạy |
+| Ghi / sửa file | Write, Edit, MultiEdit… | Hỏi trước |
+| Chạy lệnh | Bash… | Hỏi trước |
+
+- "Tắt": agent không thấy nhóm công cụ đó.
+- "Hỏi trước": agent phải chờ bạn bấm Duyệt trên dashboard.
+- Công cụ làm việc nhóm của Manager luôn được dùng.
+
+### Skill (agent Claude)
+
+Tab **Thư viện skill** trong Quản lý agent: tạo, sửa, xoá skill. Mỗi skill là `workspace/.claude/skills/<tên>/SKILL.md`, có phần mô tả (agent dựa vào mô tả để quyết định khi nào dùng) và nội dung Markdown. Có thể tự chép thêm file kèm theo (script, mẫu…) vào thư mục của skill.
+
+Trong form của từng agent, tích chọn skill mà agent được dùng; agent chỉ thấy các skill được tích. Xoá skill thì skill tự gỡ khỏi mọi agent.
+
+- Để nạp được skill, server đọc thư mục `.claude/` **của thư mục làm việc** (`settingSources: ["project"]`). Cấu hình cá nhân trong `~/.claude` trên máy chạy server không bao giờ được nạp.
+- Skill không phải hàng rào bảo mật: agent vẫn đọc được file của skill không được bật cho nó. Đừng để mật khẩu hay khoá API trong skill.
+- Skill nằm trên ổ đĩa, không nằm trong database. Khi deploy, thư mục làm việc phải được giữ lại giữa các lần khởi động.
 
 Thay đổi áp dụng cho task kế tiếp. Có `DATABASE_URL` thì thay đổi được lưu vào bảng `agent_settings`; bảng này chỉ lưu những gì khác mặc định, nên khi code cập nhật giá trị mặc định thì agent chưa chỉnh sẽ tự nhận giá trị mới. Không có database thì thay đổi mất khi tắt server.
 

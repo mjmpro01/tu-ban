@@ -1,4 +1,13 @@
-import { type AgentInfo, type AgentSettings, type CharacterId, emptyUsage } from "@tu-ban/shared";
+import {
+  type AgentInfo,
+  type AgentSettings,
+  type CharacterId,
+  DEFAULT_TOOL_POLICY,
+  SKILL_NAME_PATTERN,
+  TOOL_GROUPS,
+  type ToolPolicy,
+  emptyUsage,
+} from "@tu-ban/shared";
 import { CLAUDE_MODEL, MAX_REVIEW_ROUNDS, MAX_SUBTASKS, MAX_TREE_BUDGET_USD } from "./config.ts";
 
 /** An agent: fixed identity (id, character, desk) + settings that can be edited from the dashboard. */
@@ -24,6 +33,8 @@ export const ROSTER: AgentConfig[] = [
     character: "manager",
     desk: 0,
     enabled: true,
+    skills: [],
+    tools: { ...DEFAULT_TOOL_POLICY },
     systemPrompt: `${COMMON}
 You are the Manager of this office. You plan, delegate, check and combine; your team does the hands-on work.
 
@@ -45,6 +56,8 @@ How to work:
     character: "researcher",
     desk: 1,
     enabled: true,
+    skills: [],
+    tools: { ...DEFAULT_TOOL_POLICY },
     systemPrompt: `${COMMON}\nYou are the researcher. Search the web and read files to answer accurately, citing sources.`,
   },
   {
@@ -56,6 +69,8 @@ How to work:
     character: "writer",
     desk: 2,
     enabled: true,
+    skills: [],
+    tools: { ...DEFAULT_TOOL_POLICY },
     systemPrompt: `${COMMON}\nYou are the writer. Produce clear, well-structured documents and save them as Markdown files in the working folder.`,
   },
   {
@@ -67,6 +82,8 @@ How to work:
     character: "cursor",
     desk: 3,
     enabled: true,
+    skills: [],
+    tools: { ...DEFAULT_TOOL_POLICY },
     systemPrompt: COMMON,
   },
   {
@@ -78,11 +95,13 @@ How to work:
     character: "copilot",
     desk: 4,
     enabled: true,
+    skills: [],
+    tools: { ...DEFAULT_TOOL_POLICY },
     systemPrompt: COMMON,
   },
 ];
 
-export const SETTINGS_KEYS = ["name", "role", "provider", "model", "systemPrompt", "enabled"] as const;
+export const SETTINGS_KEYS = ["name", "role", "provider", "model", "systemPrompt", "enabled", "skills", "tools"] as const;
 
 export const pickSettings = (c: AgentSettings): AgentSettings => ({
   name: c.name,
@@ -91,10 +110,18 @@ export const pickSettings = (c: AgentSettings): AgentSettings => ({
   model: c.model,
   systemPrompt: c.systemPrompt,
   enabled: c.enabled,
+  skills: [...c.skills],
+  tools: { ...c.tools },
 });
 
-/** Validate an edit coming from the dashboard. Throws a user-facing (Vietnamese) message. */
-export function validateSettings(id: string, s: Partial<AgentSettings>): Partial<AgentSettings> {
+const SKILL_RE = new RegExp(SKILL_NAME_PATTERN);
+const TOOL_MODES = ["off", "ask", "auto"];
+
+/**
+ * Validate an edit coming from the dashboard. Throws a user-facing (Vietnamese) message.
+ * `knownSkills` (when given) rejects skills that are not in the library.
+ */
+export function validateSettings(id: string, s: Partial<AgentSettings>, knownSkills?: Set<string>): Partial<AgentSettings> {
   const out: Partial<AgentSettings> = {};
   if (s.name !== undefined) {
     const v = String(s.name).trim();
@@ -123,6 +150,24 @@ export function validateSettings(id: string, s: Partial<AgentSettings>): Partial
   if (s.enabled !== undefined) {
     if (id === MANAGER_ID && !s.enabled) throw new Error("Không thể tắt Manager: Manager nhận mọi yêu cầu không chỉ định agent");
     out.enabled = !!s.enabled;
+  }
+  if (s.skills !== undefined) {
+    if (!Array.isArray(s.skills) || s.skills.length > 50) throw new Error("Danh sách skill không hợp lệ");
+    const names = [...new Set(s.skills.map(String))];
+    const bad = names.find((n) => !SKILL_RE.test(n) || (knownSkills && !knownSkills.has(n)));
+    if (bad) throw new Error(`Skill "${bad}" không có trong thư viện`);
+    out.skills = names.sort();
+  }
+  if (s.tools !== undefined) {
+    if (typeof s.tools !== "object" || s.tools === null) throw new Error("Quyền công cụ không hợp lệ");
+    const tools = { ...DEFAULT_TOOL_POLICY } as ToolPolicy;
+    for (const g of TOOL_GROUPS) {
+      const mode = (s.tools as Partial<ToolPolicy>)[g.id];
+      if (mode === undefined) continue;
+      if (!TOOL_MODES.includes(mode)) throw new Error(`Chế độ "${mode}" không hợp lệ cho nhóm ${g.label}`);
+      tools[g.id] = mode;
+    }
+    out.tools = tools;
   }
   return out;
 }

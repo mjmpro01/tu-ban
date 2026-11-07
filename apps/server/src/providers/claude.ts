@@ -1,11 +1,12 @@
 import { type CanUseTool, type SDKMessage, createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { toolActivity } from "@tu-ban/shared";
+import { TOOL_GROUPS } from "@tu-ban/shared";
 import { MAX_BUDGET_USD, MAX_TURNS } from "../config.ts";
 import { type AgentProvider, type RunContext, type RunResult, type TeamApi, clip, summarizeToolInput } from "./types.ts";
 
-/** Tools that only read: run them without asking the human. Everything else needs approval. */
-const READ_ONLY_TOOLS = new Set(["Read", "Glob", "Grep", "WebSearch", "WebFetch", "TodoWrite", "LS", "NotebookRead"]);
+/** Harmless internal tools that are not part of the configurable groups. */
+const ALWAYS_ALLOWED = new Set(["TodoWrite", "Skill"]);
 
 const TEAM_SERVER = "team";
 const TEAM_PREFIX = `mcp__${TEAM_SERVER}__`;
@@ -110,8 +111,13 @@ export const claudeProvider: AgentProvider = {
 
     const toolNames = new Map<string, string>();
 
+    // Tool permissions from the agent settings: "off" groups are removed, "auto" runs, "ask" waits for a human.
+    const disallowedTools = TOOL_GROUPS.filter((g) => ctx.config.tools[g.id] === "off").flatMap((g) => [...g.tools]);
     const canUseTool: CanUseTool = async (toolName, input) => {
-      if (READ_ONLY_TOOLS.has(toolName) || toolName.startsWith(TEAM_PREFIX)) return { behavior: "allow", updatedInput: input };
+      if (ALWAYS_ALLOWED.has(toolName) || toolName.startsWith(TEAM_PREFIX)) return { behavior: "allow", updatedInput: input };
+      const mode = ctx.toolMode(toolName);
+      if (mode === "auto") return { behavior: "allow", updatedInput: input };
+      if (mode === "off") return { behavior: "deny", message: `You are not allowed to use ${toolName}. Work without it or explain what you need.` };
       const ok = await ctx.requestApproval(toolName, summarizeToolInput(toolName, input), input);
       return ok
         ? { behavior: "allow", updatedInput: input }
@@ -124,9 +130,12 @@ export const claudeProvider: AgentProvider = {
         model: ctx.config.model,
         cwd: ctx.workdir,
         systemPrompt: { type: "preset", preset: "claude_code", append: ctx.config.systemPrompt },
-        // Isolation: do not pick up ~/.claude or project settings from the host machine.
-        settingSources: [],
+        // Only the work folder's own .claude/ is read (that is where the skill library lives);
+        // ~/.claude on the host machine is never loaded.
+        settingSources: ["project"],
+        skills: ctx.skills,
         permissionMode: "default",
+        disallowedTools,
         canUseTool,
         maxTurns: MAX_TURNS,
         maxBudgetUsd: MAX_BUDGET_USD,

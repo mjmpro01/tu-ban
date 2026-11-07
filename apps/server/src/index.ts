@@ -8,6 +8,7 @@ import { DATABASE_URL, MODE, PORT, ROOT, WORKDIR } from "./config.ts";
 import { PgPersistence } from "./db.ts";
 import { Orchestrator } from "./orchestrator.ts";
 import { Store } from "./store.ts";
+import { deleteSkill, getSkill, listSkills, saveSkill, skillExists } from "./skills.ts";
 
 const app = Fastify({ logger: false });
 const db = DATABASE_URL ? await PgPersistence.connect(DATABASE_URL) : undefined;
@@ -46,6 +47,38 @@ app.put<{ Params: { id: string }; Body: Partial<AgentSettings> }>("/api/agents/:
 app.post<{ Params: { id: string } }>("/api/agents/:id/settings/reset", async (req, reply) => {
   try {
     return await orchestrator.resetAgentSettings(req.params.id);
+  } catch (e) {
+    return reply.code(400).send({ error: (e as Error).message });
+  }
+});
+
+// Skill library (workspace/.claude/skills). Same caveat: no login yet.
+const usedBy = (name: string) => orchestrator.skillUsers(name);
+app.get("/api/skills", async () => listSkills(usedBy));
+app.get<{ Params: { name: string } }>("/api/skills/:name", async (req, reply) => {
+  try {
+    return (await getSkill(req.params.name, usedBy)) ?? reply.code(404).send({ error: "Không có skill này" });
+  } catch (e) {
+    return reply.code(400).send({ error: (e as Error).message });
+  }
+});
+app.put<{ Params: { name: string }; Body: { description?: string; body?: string; create?: boolean } }>(
+  "/api/skills/:name",
+  async (req, reply) => {
+    try {
+      if (req.body?.create && (await skillExists(req.params.name))) throw new Error("Đã có skill trùng tên");
+      await saveSkill(req.params.name, req.body ?? {});
+      return await getSkill(req.params.name, usedBy);
+    } catch (e) {
+      return reply.code(400).send({ error: (e as Error).message });
+    }
+  },
+);
+app.delete<{ Params: { name: string } }>("/api/skills/:name", async (req, reply) => {
+  try {
+    await deleteSkill(req.params.name);
+    await orchestrator.forgetSkill(req.params.name);
+    return { ok: true };
   } catch (e) {
     return reply.code(400).send({ error: (e as Error).message });
   }

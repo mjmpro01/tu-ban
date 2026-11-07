@@ -10,7 +10,10 @@ import {
   type TaskKind,
   type Usage,
   emptyUsage,
+  sameValue,
+  toolGroupOf,
 } from "@tu-ban/shared";
+import { listSkills, skillExists } from "./skills.ts";
 import {
   type AgentConfig,
   MANAGER_ID,
@@ -45,6 +48,8 @@ const SETTING_LABELS: Record<keyof AgentSettings, string> = {
   model: "model",
   systemPrompt: "system prompt",
   enabled: "bật/tắt",
+  skills: "skill",
+  tools: "quyền công cụ",
 };
 /** How much of an earlier result is copied into a follow-up sub-task. */
 const CONTEXT_CHARS = 6000;
@@ -115,7 +120,7 @@ export class Orchestrator {
         character: c.character,
         desk: c.desk,
         defaults,
-        isDefault: SETTINGS_KEYS.every((k) => current[k] === defaults[k]),
+        isDefault: SETTINGS_KEYS.every((k) => sameValue(current[k], defaults[k])),
         generatedPrompt: c.id === MANAGER_ID ? managerTeamSection(all) : undefined,
         required: c.id === MANAGER_ID,
         runtimeNote: this.runtimeNotes.get(c.id),
@@ -127,14 +132,15 @@ export class Orchestrator {
   async updateAgentSettings(id: string, patch: Partial<AgentSettings>): Promise<AgentConfigView> {
     const current = this.configs.get(id);
     if (!current) throw new Error(`Không có agent "${id}"`);
-    const clean = validateSettings(id, patch);
+    const known = new Set((await listSkills(() => [])).map((sk) => sk.name));
+    const clean = validateSettings(id, patch, known);
     const next: AgentConfig = { ...current, ...clean };
-    const changed = SETTINGS_KEYS.filter((k) => next[k] !== current[k]);
+    const changed = SETTINGS_KEYS.filter((k) => !sameValue(next[k], current[k]));
     if (!changed.length) return this.agentConfigs().find((c) => c.id === id)!;
 
     // store only what differs from the defaults
     const defaults = pickSettings(ROSTER.find((r) => r.id === id)!);
-    const diff = Object.fromEntries(SETTINGS_KEYS.filter((k) => next[k] !== defaults[k]).map((k) => [k, next[k]]));
+    const diff = Object.fromEntries(SETTINGS_KEYS.filter((k) => !sameValue(next[k], defaults[k])).map((k) => [k, next[k]]));
     if (this.store.db) {
       if (Object.keys(diff).length) await this.store.db.saveAgentSettings(id, diff);
       else await this.store.db.deleteAgentSettings(id);
@@ -159,6 +165,19 @@ export class Orchestrator {
       summary: `Cập nhật cấu hình: ${changed.map((k) => SETTING_LABELS[k]).join(", ")}${busy ? " (áp dụng từ task sau)" : ""}`,
     });
     return this.agentConfigs().find((c) => c.id === id)!;
+  }
+
+  /** Agents that have a skill enabled (for the skill library). */
+  skillUsers(name: string) {
+    return [...this.configs.values()].filter((c) => c.skills.includes(name)).map((c) => c.id);
+  }
+
+  /** After a skill is deleted from the library, take it off every agent. */
+  async forgetSkill(name: string) {
+    for (const id of this.skillUsers(name)) {
+      const c = this.configs.get(id)!;
+      await this.updateAgentSettings(id, { skills: c.skills.filter((s) => s !== name) });
+    }
   }
 
   resetAgentSettings(id: string) {
@@ -444,9 +463,18 @@ export class Orchestrator {
     const team = agent.id === MANAGER_ID && !task.parentId ? this.makeTeam(task, emit, controller.signal) : undefined;
 
     try {
+      const skills = (await Promise.all(config.skills.map(async (n) => ((await skillExists(n)) ? n : undefined)))).filter(
+        (n): n is string => !!n,
+      );
+      const toolMode = (tool: string) => {
+        const group = toolGroupOf(tool);
+        return group ? config.tools[group] : "ask";
+      };
       const { result, usage } = await provider.run({
         task,
         agent,
+        skills,
+        toolMode,
         config: team ? { ...config, systemPrompt: `${config.systemPrompt}\n\n${managerTeamSection([...this.configs.values()])}` } : config,
         workdir: WORKDIR,
         signal: controller.signal,
