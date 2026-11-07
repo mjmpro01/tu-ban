@@ -1,12 +1,14 @@
 import type { AgentInfo, Approval, Task } from "@tu-ban/shared";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { createGame } from "./game/OfficeScene";
+import { AgentSettingsDialog } from "./AgentSettings";
 import { HistoryDialog } from "./History";
 import { actions, store, useStore } from "./store";
 import { PROVIDER_LABEL, Portrait, STATUS_LABEL, TASK_LABEL, TimelineItem, fmtCost, fmtTime, fmtTokens } from "./ui";
 
 export function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   return (
     <div className="app">
       <main className="office">
@@ -14,13 +16,14 @@ export function App() {
         <p className="hint">Bấm vào một nhân vật để xem riêng hoạt động của agent đó.</p>
       </main>
       <aside className="dashboard">
-        <Header onOpenHistory={() => setHistoryOpen(true)} />
+        <Header onOpenHistory={() => setHistoryOpen(true)} onOpenSettings={() => setSettingsOpen(true)} />
         <Composer />
         <Approvals />
         <AgentList />
         <Activity onOpenHistory={() => setHistoryOpen(true)} />
       </aside>
       <HistoryDialog open={historyOpen} onClose={() => setHistoryOpen(false)} />
+      <AgentSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }
@@ -34,7 +37,7 @@ function GameView() {
   return <div className="game" ref={ref} />;
 }
 
-function Header({ onOpenHistory }: { onOpenHistory: () => void }) {
+function Header({ onOpenHistory, onOpenSettings }: { onOpenHistory: () => void; onOpenSettings: () => void }) {
   const connected = useStore((s) => s.connected);
   const mode = useStore((s) => s.mode);
   const agents = useStore((s) => s.agents);
@@ -55,11 +58,14 @@ function Header({ onOpenHistory }: { onOpenHistory: () => void }) {
         <button type="button" className="secondary small" onClick={onOpenHistory}>
           Lịch sử
         </button>
+        <button type="button" className="secondary small" onClick={onOpenSettings}>
+          Quản lý agent
+        </button>
         <span className={`pill ${connected ? "ok" : "bad"}`}>{connected ? "Đã kết nối" : "Mất kết nối"}</span>
         {mode && <span className={`pill ${mode === "live" ? "live" : "demo"}`}>{mode === "live" ? "Live" : "Demo"}</span>}
       </div>
       <div className="stats">
-        <Stat label="Đang làm" value={`${totals.working}/${Object.keys(agents).length}`} />
+        <Stat label="Đang làm" value={`${totals.working}/${Object.values(agents).filter((a) => a.enabled).length}`} />
         <Stat label="Task mở" value={String(active)} />
         <Stat label="Token" value={fmtTokens(totals.tokens)} />
         <Stat label="Chi phí" value={fmtCost(totals.cost)} />
@@ -114,11 +120,13 @@ function Composer() {
       <div className="composer-row">
         <select value={agentId} onChange={(e) => setAgentId(e.target.value)} aria-label="Giao cho">
           <option value="">Tự động (Manager chọn)</option>
-          {Object.values(agents).map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name}
-            </option>
-          ))}
+          {Object.values(agents)
+            .filter((a) => a.enabled)
+            .map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
         </select>
         <button type="submit" disabled={busy || !prompt.trim()}>
           Gửi
@@ -183,14 +191,18 @@ function AgentList() {
           .sort((a, b) => a.desk - b.desk)
           .map((a) => (
             <li key={a.id}>
-              <button type="button" className={`agent ${selected === a.id ? "selected" : ""}`} onClick={() => store.select(a.id)}>
+              <button
+                type="button"
+                className={`agent ${selected === a.id ? "selected" : ""} ${a.enabled ? "" : "is-disabled"}`}
+                onClick={() => store.select(a.id)}
+              >
                 <Portrait agent={a} />
                 <div className="agent-body">
                   <div className="agent-top">
                     <strong>{a.name}</strong>
                     <span className={`badge provider-${a.provider}`}>{PROVIDER_LABEL[a.provider]}</span>
                     {a.runtime !== a.provider && <span className="badge provider-mock">demo</span>}
-                    <span className={`status status-${a.status}`}>{STATUS_LABEL[a.status]}</span>
+                    <span className={`status status-${a.enabled ? a.status : "off"}`}>{a.enabled ? STATUS_LABEL[a.status] : "Đã tắt"}</span>
                   </div>
                   <div className="agent-summary">{a.summary}</div>
                   <div className="agent-meta">

@@ -17,6 +17,7 @@ const text = (t: string, isError = false) => ({ content: [{ type: "text" as cons
 /** In-process MCP server exposing the team API to the Manager. */
 function teamServer(team: TeamApi) {
   const ids = team.members().map((m) => m.id) as [string, ...string[]];
+  // note: the list is fixed for this run; agents enabled later join from the next request
   const guard =
     <A>(fn: (args: A) => Promise<ReturnType<typeof text>>) =>
     async (args: A) => {
@@ -40,7 +41,7 @@ Team: ${team
           .map((m) => `${m.id} (${m.role})`)
           .join("; ")}.`,
         {
-          agent_id: z.enum(ids).describe("Who does the work"),
+          agent_id: (ids.length ? z.enum(ids) : z.string()).describe("Who does the work"),
           instructions: z.string().min(10).describe("What to do and what to deliver, self-contained"),
           context_task_ids: z.array(z.string()).optional().describe("Earlier task ids whose results this sub-task needs"),
         },

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import fastifyStatic from "@fastify/static";
-import { type ClientToServer, type ServerToClient, type TaskQuery, matchesTaskQuery } from "@tu-ban/shared";
+import { type AgentSettings, type ClientToServer, type ServerToClient, type TaskQuery, matchesTaskQuery } from "@tu-ban/shared";
 import Fastify from "fastify";
 import { Server } from "socket.io";
 import { DATABASE_URL, MODE, PORT, ROOT, WORKDIR } from "./config.ts";
@@ -32,6 +32,23 @@ app.post<{ Params: { id: string }; Body: { approve?: boolean } }>("/api/approval
 app.post<{ Params: { id: string } }>("/api/tasks/:id/cancel", async (req) => {
   orchestrator.cancel(req.params.id);
   return { ok: true };
+});
+
+// Agent settings (edited from the dashboard). No login yet: anyone who can open the dashboard can change them.
+app.get("/api/agents/settings", async () => orchestrator.agentConfigs());
+app.put<{ Params: { id: string }; Body: Partial<AgentSettings> }>("/api/agents/:id/settings", async (req, reply) => {
+  try {
+    return await orchestrator.updateAgentSettings(req.params.id, req.body ?? {});
+  } catch (e) {
+    return reply.code(400).send({ error: (e as Error).message });
+  }
+});
+app.post<{ Params: { id: string } }>("/api/agents/:id/settings/reset", async (req, reply) => {
+  try {
+    return await orchestrator.resetAgentSettings(req.params.id);
+  } catch (e) {
+    return reply.code(400).send({ error: (e as Error).message });
+  }
 });
 
 // Task history beyond what the dashboard keeps in memory (needs the database).

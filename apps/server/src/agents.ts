@@ -1,37 +1,31 @@
-import { type AgentInfo, type CharacterId, type ProviderId, emptyUsage } from "@tu-ban/shared";
-import { CLAUDE_MODEL, MAX_REVIEW_ROUNDS, MAX_SUBTASKS } from "./config.ts";
+import { type AgentInfo, type AgentSettings, type CharacterId, emptyUsage } from "@tu-ban/shared";
+import { CLAUDE_MODEL, MAX_REVIEW_ROUNDS, MAX_SUBTASKS, MAX_TREE_BUDGET_USD } from "./config.ts";
 
-export interface AgentConfig {
+/** An agent: fixed identity (id, character, desk) + settings that can be edited from the dashboard. */
+export interface AgentConfig extends AgentSettings {
   id: string;
-  name: string;
-  role: string;
-  provider: ProviderId;
-  model?: string;
   character: CharacterId;
   desk: number;
-  systemPrompt: string;
 }
+
+export const MANAGER_ID = "manager";
 
 const COMMON = `You work in a small AI office with other agents. Keep the user informed with short progress notes.
 Reply in the same language as the task (Vietnamese if the task is written in Vietnamese).`;
 
+/** Defaults shipped with the app. Edits made in the dashboard are stored as overrides on top of these. */
 export const ROSTER: AgentConfig[] = [
   {
-    id: "manager",
+    id: MANAGER_ID,
     name: "Manager",
-    role: "Lập kế hoạch, chia việc, tổng hợp",
+    role: "Lập kế hoạch, giao việc, tổng hợp",
     provider: "claude",
     model: CLAUDE_MODEL,
     character: "manager",
     desk: 0,
+    enabled: true,
     systemPrompt: `${COMMON}
 You are the Manager of this office. You plan, delegate, check and combine; your team does the hands-on work.
-
-Your team (use these ids with the team tools):
-- researcher: web research and reading documents; also reviews other agents' work
-- writer: writes documents and reports as Markdown files in the shared working folder
-- cursor: changes code in the local repository
-- copilot: handles GitHub issues and opens pull requests
 
 How to work:
 1. If the request is a quick question you can answer well yourself, just answer it.
@@ -40,10 +34,7 @@ How to work:
 3. When a sub-task needs earlier results, pass those task ids in context_task_ids instead of copying the text.
 4. After code changes, call request_review on that task. If changes are requested, delegate a fix to the same agent
    with the reviewer's feedback, then review again.
-5. Finish with a short answer for the user that combines the results and lists any files that were created.
-
-Limits per request: at most ${MAX_SUBTASKS} sub-tasks and ${MAX_REVIEW_ROUNDS} reviews. A tool call fails when a limit or the
-budget is reached; then summarise what the team has done so far.`,
+5. Finish with a short answer for the user that combines the results and lists any files that were created.`,
   },
   {
     id: "researcher",
@@ -53,6 +44,7 @@ budget is reached; then summarise what the team has done so far.`,
     model: CLAUDE_MODEL,
     character: "researcher",
     desk: 1,
+    enabled: true,
     systemPrompt: `${COMMON}\nYou are the researcher. Search the web and read files to answer accurately, citing sources.`,
   },
   {
@@ -63,6 +55,7 @@ budget is reached; then summarise what the team has done so far.`,
     model: CLAUDE_MODEL,
     character: "writer",
     desk: 2,
+    enabled: true,
     systemPrompt: `${COMMON}\nYou are the writer. Produce clear, well-structured documents and save them as Markdown files in the working folder.`,
   },
   {
@@ -70,8 +63,10 @@ budget is reached; then summarise what the team has done so far.`,
     name: "Dev Cursor",
     role: "Sửa code nhiều file trong repo local",
     provider: "cursor",
+    model: CLAUDE_MODEL,
     character: "cursor",
     desk: 3,
+    enabled: true,
     systemPrompt: COMMON,
   },
   {
@@ -79,13 +74,76 @@ budget is reached; then summarise what the team has done so far.`,
     name: "Dev Copilot",
     role: "Task GitHub issue → PR",
     provider: "copilot",
+    model: CLAUDE_MODEL,
     character: "copilot",
     desk: 4,
+    enabled: true,
     systemPrompt: COMMON,
   },
 ];
 
-export function toAgentInfo(c: AgentConfig, runtime: ProviderId): AgentInfo {
+export const SETTINGS_KEYS = ["name", "role", "provider", "model", "systemPrompt", "enabled"] as const;
+
+export const pickSettings = (c: AgentSettings): AgentSettings => ({
+  name: c.name,
+  role: c.role,
+  provider: c.provider,
+  model: c.model,
+  systemPrompt: c.systemPrompt,
+  enabled: c.enabled,
+});
+
+/** Validate an edit coming from the dashboard. Throws a user-facing (Vietnamese) message. */
+export function validateSettings(id: string, s: Partial<AgentSettings>): Partial<AgentSettings> {
+  const out: Partial<AgentSettings> = {};
+  if (s.name !== undefined) {
+    const v = String(s.name).trim();
+    if (!v || v.length > 40) throw new Error("Tên phải có từ 1 đến 40 ký tự");
+    out.name = v;
+  }
+  if (s.role !== undefined) {
+    const v = String(s.role).trim();
+    if (v.length > 120) throw new Error("Vai trò tối đa 120 ký tự");
+    out.role = v;
+  }
+  if (s.provider !== undefined) {
+    if (!["claude", "cursor", "copilot"].includes(s.provider)) throw new Error("Provider không hợp lệ");
+    out.provider = s.provider;
+  }
+  if (s.model !== undefined) {
+    const v = String(s.model).trim();
+    if (!/^[a-z0-9][a-z0-9.\-_:]{1,63}$/i.test(v)) throw new Error("Tên model không hợp lệ");
+    out.model = v;
+  }
+  if (s.systemPrompt !== undefined) {
+    const v = String(s.systemPrompt);
+    if (v.length > 20000) throw new Error("System prompt tối đa 20.000 ký tự");
+    out.systemPrompt = v;
+  }
+  if (s.enabled !== undefined) {
+    if (id === MANAGER_ID && !s.enabled) throw new Error("Không thể tắt Manager: Manager nhận mọi yêu cầu không chỉ định agent");
+    out.enabled = !!s.enabled;
+  }
+  return out;
+}
+
+/**
+ * The part of the Manager's prompt generated from the current roster, so renaming or disabling
+ * an agent never leaves the Manager delegating to someone who is not there.
+ */
+export function managerTeamSection(configs: AgentConfig[]): string {
+  const team = configs.filter((c) => c.id !== MANAGER_ID && c.enabled);
+  const lines = team.length
+    ? team.map((c) => `- ${c.id} (${c.name}): ${c.role || "no role set"}`).join("\n")
+    : "- (nobody: every other agent is disabled, so do the work yourself)";
+  return `Your team (use these ids with the team tools):
+${lines}
+
+Limits per request: at most ${MAX_SUBTASKS} sub-tasks, ${MAX_REVIEW_ROUNDS} reviews and $${MAX_TREE_BUDGET_USD} for the whole team.
+A tool call fails when a limit or the budget is reached; then summarise what the team has done so far.`;
+}
+
+export function toAgentInfo(c: AgentConfig, runtime: AgentInfo["runtime"]): AgentInfo {
   return {
     id: c.id,
     name: c.name,
@@ -97,18 +155,9 @@ export function toAgentInfo(c: AgentConfig, runtime: ProviderId): AgentInfo {
     desk: c.desk,
     status: "idle",
     activity: "idle",
-    summary: "Đang rảnh",
+    summary: c.enabled ? "Đang rảnh" : "Đã tắt",
     usage: emptyUsage(),
     requests: 0,
+    enabled: c.enabled,
   };
-}
-
-/** Keyword hint used by the demo Manager to pick a plan. */
-export function routeTask(prompt: string): string {
-  const p = prompt.toLowerCase();
-  if (/(github|issue|pull request|\bpr\b)/.test(p)) return "copilot";
-  if (/(code|bug|refactor|sửa lỗi|lập trình|function|hàm|test)/.test(p)) return "cursor";
-  if (/(tìm|search|research|nghiên cứu|tra cứu|so sánh|compare)/.test(p)) return "researcher";
-  if (/(viết|write|báo cáo|report|blog|bài|email|tóm tắt|summary)/.test(p)) return "writer";
-  return "manager";
 }
