@@ -1,5 +1,5 @@
 import { DEMO_SPEED } from "../config.ts";
-import { type AgentProvider, type RunContext, type RunResult, clip, sleep } from "./types.ts";
+import { type AgentProvider, type RunContext, type RunResult, type TeamApi, clip, sleep } from "./types.ts";
 
 type Step =
   | { kind: "think"; ms: number }
@@ -8,8 +8,14 @@ type Step =
   | { kind: "approve"; tool: string; input: string };
 
 /** Scripted, cost-free runs so the office can be demoed without any API keys. */
-function script(agentId: string, prompt: string): Step[] {
+function script(agentId: string, prompt: string, kind: string): Step[] {
   const topic = clip(prompt, 40);
+  if (kind === "review")
+    return [
+      { kind: "tool", tool: "Read", input: "src/app.ts", ms: 3000 },
+      { kind: "think", ms: 2500 },
+      { kind: "say", text: "Đang đối chiếu với yêu cầu…", ms: 2500 },
+    ];
   switch (agentId) {
     case "researcher":
       return [
@@ -62,8 +68,9 @@ export const mockProvider: AgentProvider = {
 
   async run(ctx: RunContext): Promise<RunResult> {
     const wait = (ms: number) => sleep(ms * DEMO_SPEED * (0.8 + Math.random() * 0.4), ctx.signal);
+    if (ctx.team) return managerPlan(ctx, ctx.team, wait);
     let tokensOut = 0;
-    for (const step of script(ctx.agent.id, ctx.task.prompt)) {
+    for (const step of script(ctx.agent.id, ctx.task.title, ctx.task.kind)) {
       if (step.kind === "think") {
         ctx.emit({ type: "thinking", activity: "thinking", summary: "Đang suy nghĩ…" });
         await wait(step.ms);
@@ -89,10 +96,63 @@ export const mockProvider: AgentProvider = {
         }
       }
     }
-    const result = `(demo) Đã hoàn thành: ${clip(ctx.task.prompt, 80)}`;
+    const result =
+      ctx.task.kind === "review"
+        ? reviewVerdict(ctx.task.prompt)
+        : `(demo) ${ctx.agent.name} đã hoàn thành: ${ctx.task.title}`;
     return {
       result,
       usage: ctx.agent.provider === "claude" ? { tokensIn: 3200, tokensOut: tokensOut + 400, costUsd: 0 } : undefined,
     };
   },
 };
+
+/** Demo reviewer: asks for changes on the first look at code, approves the fix. */
+function reviewVerdict(prompt: string) {
+  if (/Sửa theo góp ý/.test(prompt)) return "(demo) Đã kiểm tra bản sửa: các điểm góp ý đã được xử lý.\nVERDICT: APPROVED";
+  return "(demo) Thiếu test cho trường hợp chuỗi rỗng; tên biến `tmp` khó hiểu.\nVERDICT: CHANGES_REQUESTED";
+}
+
+/** Demo Manager: plans with keywords, then really delegates, waits and reviews through the team API. */
+async function managerPlan(ctx: RunContext, team: TeamApi, wait: (ms: number) => Promise<void>): Promise<RunResult> {
+  const say = (text: string) => ctx.emit({ type: "message", activity: "write", summary: text, detail: text });
+  const p = ctx.task.prompt.toLowerCase();
+  const topic = clip(ctx.task.prompt, 60);
+  ctx.emit({ type: "thinking", activity: "thinking", summary: "Đang lập kế hoạch…" });
+  await wait(2500);
+
+  const lines: string[] = [];
+  if (/(github|issue|pull request|\bpr\b|code|bug|refactor|sửa lỗi|lập trình|hàm|test)/.test(p)) {
+    const onGithub = /(github|issue|pull request|\bpr\b)/.test(p);
+    const dev = onGithub ? "copilot" : "cursor";
+    say(`Kế hoạch: ${onGithub ? "Dev Copilot" : "Dev Cursor"} xử lý, Researcher review.`);
+    await wait(1500);
+    let work = team.delegate(dev, `Thực hiện: ${topic}`);
+    await team.waitFor([work]);
+    let review = await team.review(work, "tính đúng đắn và test");
+    if (!review.approved) {
+      say("Review yêu cầu sửa, giao lại kèm góp ý.");
+      work = team.delegate(dev, `Sửa theo góp ý review: ${clip(review.feedback, 120)}`, [work, review.reviewTaskId]);
+      await team.waitFor([work]);
+      review = await team.review(work);
+    }
+    lines.push(`- ${onGithub ? "Dev Copilot" : "Dev Cursor"} đã thực hiện thay đổi.`, `- Review: ${review.approved ? "đã duyệt" : "còn góp ý chưa xử lý"}.`);
+  } else {
+    say("Kế hoạch: Researcher thu thập thông tin, Writer lập dàn ý, rồi Writer viết bản hoàn chỉnh.");
+    await wait(1500);
+    const research = team.delegate("researcher", `Thu thập thông tin và số liệu về: ${topic}`);
+    const outline = team.delegate("writer", `Lập dàn ý cho: ${topic}`);
+    const first = await team.waitFor([research, outline]);
+    ctx.emit({ type: "thinking", activity: "thinking", summary: "Họp: tổng hợp tài liệu và dàn ý…" });
+    await wait(6000);
+    const draft = team.delegate("writer", "Viết bản hoàn chỉnh dựa trên tài liệu và dàn ý đã có", [research, outline]);
+    const [final] = await team.waitFor([draft]);
+    lines.push(...first.map((r) => `- ${r.agentId}: ${r.status === "done" ? "xong" : "lỗi"}`), `- Bản hoàn chỉnh: ${final.status === "done" ? "xong" : "lỗi"}`);
+  }
+  ctx.emit({ type: "thinking", activity: "thinking", summary: "Viết tổng kết cho người dùng…" });
+  await wait(2000);
+  return {
+    result: `(demo) Tổng kết cho: ${topic}\n${lines.join("\n")}`,
+    usage: { tokensIn: 5200, tokensOut: 900, costUsd: 0 },
+  };
+}

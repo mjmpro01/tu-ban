@@ -42,3 +42,8 @@ export const DEMO_SPEED = Number(env.DEMO_SPEED ?? 1);
 
 /** Postgres connection string. Unset = keep everything in memory only. */
 export const DATABASE_URL = env.DATABASE_URL;
+
+/** Teamwork limits for one user request (the Manager's task and everything it delegates). */
+export const MAX_TREE_BUDGET_USD = Number(env.MAX_TREE_BUDGET_USD ?? 5);
+export const MAX_SUBTASKS = Number(env.MAX_SUBTASKS ?? 8);
+export const MAX_REVIEW_ROUNDS = Number(env.MAX_REVIEW_ROUNDS ?? 2);

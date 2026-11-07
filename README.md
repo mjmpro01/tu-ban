@@ -85,13 +85,39 @@ Server phục vụ luôn bản web đã build ở http://localhost:8787.
 
 | Agent | Provider | Việc |
 |---|---|---|
-| Manager | Claude | Lập kế hoạch, chia việc |
-| Researcher | Claude | Tìm kiếm, đọc tài liệu |
+| Manager | Claude | Lập kế hoạch, giao việc, tổng hợp |
+| Researcher | Claude | Tìm kiếm, đọc tài liệu, review |
 | Writer | Claude | Viết báo cáo, nội dung |
 | Dev Cursor | Cursor CLI (**thử nghiệm**) | Sửa code trong repo local |
 | Dev Copilot | GitHub Copilot (**chưa làm**) | Issue → PR |
 
-Khi bạn không chọn agent, Manager tự giao việc theo từ khoá trong task (ví dụ "tìm/so sánh" → Researcher, "sửa lỗi/code" → Dev Cursor, "issue/PR" → Dev Copilot). Lúc đó nhân vật Manager đi tới bàn của agent được giao.
+### Làm việc nhóm
+
+Khi bạn không chọn agent, yêu cầu được giao cho **Manager**. Manager tự lập kế hoạch và điều phối cả nhóm bằng 3 công cụ riêng (`apps/server/src/providers/claude.ts`):
+
+| Công cụ | Việc |
+|---|---|
+| `delegate_task` | Giao việc con cho một agent, có thể đính kèm kết quả của các bước trước (`context_task_ids`) |
+| `wait_for_tasks` | Chờ các việc con xong và đọc kết quả |
+| `request_review` | Nhờ Researcher (hoặc Writer, nếu việc cần review là của Researcher) kiểm tra một việc con. Trả về APPROVED hoặc CHANGES_REQUESTED kèm góp ý |
+
+Manager chạy việc độc lập song song, chuyển kết quả bước trước cho bước sau, review sau khi sửa code, rồi tổng hợp thành câu trả lời cuối. Việc con vẫn qua hàng đợi, xin duyệt và tính chi phí như task bình thường; agent làm việc con không được giao tiếp việc cho ai khác.
+
+**Giới hạn cho mỗi yêu cầu:**
+
+| Biến | Mặc định | Ý nghĩa |
+|---|---|---|
+| `MAX_SUBTASKS` | `8` | Số việc con tối đa |
+| `MAX_REVIEW_ROUNDS` | `2` | Số lần review tối đa |
+| `MAX_TREE_BUDGET_USD` | `5` | Trần chi phí cho cả nhóm. Hết ngân sách thì Manager không giao thêm việc được và phải tổng kết |
+
+**Trong văn phòng:** Manager đi tới bàn agent để giao việc, agent mang kết quả về bàn Manager, và khi gom đủ kết quả từ 2 người trở lên thì cả nhóm họp ở bàn họp.
+
+**Trên dashboard:** tab Task hiển thị dạng cây (yêu cầu → việc con). Màn hình Lịch sử có mục "Việc con", liên kết về task cha, và tổng token / chi phí của cả nhóm. Huỷ một yêu cầu thì huỷ luôn mọi việc con.
+
+Ở chế độ Demo, Manager làm theo kịch bản nhưng vẫn đi qua đúng các API trên:
+- Yêu cầu viết/tìm hiểu: Researcher và Writer làm song song → họp → Writer viết bản cuối.
+- Yêu cầu sửa code / GitHub: Dev làm → review yêu cầu sửa → Dev sửa → review duyệt.
 
 Ở chế độ Live, provider nào chưa dùng được sẽ tự chạy bằng kịch bản demo. Dashboard hiện nhãn "demo" bên cạnh agent đó.
 

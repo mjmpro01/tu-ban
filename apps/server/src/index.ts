@@ -25,6 +25,15 @@ app.post<{ Body: { prompt: string; agentId?: string } }>("/api/tasks", async (re
   }
 });
 
+app.post<{ Params: { id: string }; Body: { approve?: boolean } }>("/api/approvals/:id", async (req) => {
+  orchestrator.decide(req.params.id, req.body?.approve === true);
+  return { ok: true };
+});
+app.post<{ Params: { id: string } }>("/api/tasks/:id/cancel", async (req) => {
+  orchestrator.cancel(req.params.id);
+  return { ok: true };
+});
+
 // Task history beyond what the dashboard keeps in memory (needs the database).
 app.get<{ Querystring: Record<string, string | undefined> }>("/api/tasks", async (req) => {
   const q = req.query;
@@ -34,6 +43,8 @@ app.get<{ Querystring: Record<string, string | undefined> }>("/api/tasks", async
     agentId: q.agentId || undefined,
     status: (q.status || undefined) as TaskQuery["status"],
     q: q.q?.trim() || undefined,
+    parentId: q.parentId || undefined,
+    rootsOnly: q.rootsOnly === "1" || q.rootsOnly === "true",
   };
   if (!db)
     return [...store.tasks.values()]

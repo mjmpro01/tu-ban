@@ -87,6 +87,11 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX approvals_status_idx ON approvals (status);
   `,
+  `
+  ALTER TABLE tasks ADD COLUMN kind text NOT NULL DEFAULT 'task';
+  CREATE INDEX tasks_parent_idx ON tasks (parent_id, created_at);
+  ALTER TABLE events ADD COLUMN participants text[];
+  `,
 ];
 
 const ms = (d: Date | null | undefined) => (d ? d.getTime() : undefined);
@@ -101,6 +106,7 @@ const toTask = (r: Row): Task => ({
   prompt: r.prompt,
   agentId: r.agent_id,
   parentId: r.parent_id ?? undefined,
+  kind: r.kind ?? "task",
   status: r.status,
   createdAt: ms(r.created_at)!,
   startedAt: ms(r.started_at),
@@ -121,6 +127,7 @@ const toEvent = (r: Row): AgentEvent => ({
   tool: r.tool ?? undefined,
   detail: r.detail ?? undefined,
   targetAgentId: r.target_agent_id ?? undefined,
+  participants: r.participants ?? undefined,
   usage:
     r.tokens_in === null ? undefined : { tokensIn: num(r.tokens_in), tokensOut: num(r.tokens_out), costUsd: num(r.cost_usd) },
 });
@@ -208,26 +215,27 @@ export class PgPersistence implements Persistence {
 
   saveTask(t: Task) {
     this.write(
-      `INSERT INTO tasks (id, title, prompt, agent_id, parent_id, status, created_at, started_at, finished_at, result, error, tokens_in, tokens_out, cost_usd)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+      `INSERT INTO tasks (id, title, prompt, agent_id, parent_id, status, created_at, started_at, finished_at, result, error, tokens_in, tokens_out, cost_usd, kind)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        ON CONFLICT (id) DO UPDATE SET
          status = EXCLUDED.status, started_at = EXCLUDED.started_at, finished_at = EXCLUDED.finished_at,
          result = EXCLUDED.result, error = EXCLUDED.error,
          tokens_in = EXCLUDED.tokens_in, tokens_out = EXCLUDED.tokens_out, cost_usd = EXCLUDED.cost_usd`,
       [
         t.id, t.title, t.prompt, t.agentId, t.parentId ?? null, t.status, date(t.createdAt), date(t.startedAt), date(t.finishedAt),
-        t.result ?? null, t.error ?? null, t.usage.tokensIn, t.usage.tokensOut, t.usage.costUsd,
+        t.result ?? null, t.error ?? null, t.usage.tokensIn, t.usage.tokensOut, t.usage.costUsd, t.kind,
       ],
     );
   }
 
   saveEvent(e: AgentEvent) {
     this.write(
-      `INSERT INTO events (id, ts, agent_id, task_id, type, activity, summary, tool, detail, target_agent_id, tokens_in, tokens_out, cost_usd)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (id) DO NOTHING`,
+      `INSERT INTO events (id, ts, agent_id, task_id, type, activity, summary, tool, detail, target_agent_id, tokens_in, tokens_out, cost_usd, participants)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (id) DO NOTHING`,
       [
         e.id, date(e.ts), e.agentId, e.taskId ?? null, e.type, e.activity, e.summary, e.tool ?? null, e.detail ?? null,
         e.targetAgentId ?? null, e.usage?.tokensIn ?? null, e.usage?.tokensOut ?? null, e.usage?.costUsd ?? null,
+        e.participants ?? null,
       ],
     );
   }
@@ -267,7 +275,7 @@ export class PgPersistence implements Persistence {
     return rows[0] ? toTask(rows[0]) : undefined;
   }
 
-  async listTasks({ limit, before, agentId, status, q }: TaskQuery & { limit: number }) {
+  async listTasks({ limit, before, agentId, status, q, parentId, rootsOnly }: TaskQuery & { limit: number }) {
     await this.queue;
     const statuses = status === "active" ? ACTIVE_STATUSES : status ? [status] : null;
     // escape LIKE wildcards so the search is literal
@@ -278,8 +286,10 @@ export class PgPersistence implements Persistence {
          AND ($3::text IS NULL OR agent_id = $3)
          AND ($4::text[] IS NULL OR status = ANY($4))
          AND ($5::text IS NULL OR title ILIKE $5 OR prompt ILIKE $5)
+         AND ($6::uuid IS NULL OR parent_id = $6)
+         AND (NOT $7::boolean OR parent_id IS NULL)
        ORDER BY created_at DESC LIMIT $1`,
-      [limit, date(before), agentId ?? null, statuses, pattern],
+      [limit, date(before), agentId ?? null, statuses, pattern, parentId && /^[0-9a-f-]{36}$/i.test(parentId) ? parentId : null, !!rootsOnly],
     );
     return rows.map(toTask);
   }

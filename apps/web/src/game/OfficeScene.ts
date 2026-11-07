@@ -4,7 +4,7 @@ import charMeta from "../../../../assets/game/characters/characters.json";
 import emoteMeta from "../../../../assets/game/ui/emotes.json";
 import { store } from "../store";
 import { AgentSprite } from "./AgentSprite";
-import { DESKS, MAP_H, MAP_W, PROPS, T, floorLayer, seatPixel, walkGrid, wallLayer } from "./officeMap";
+import { DESKS, MAP_H, MAP_W, MEETING_SPOTS, PROPS, T, floorLayer, seatPixel, walkGrid, wallLayer } from "./officeMap";
 
 const CHARACTERS: CharacterId[] = ["manager", "researcher", "writer", "cursor", "copilot"];
 export const ZOOM = 3;
@@ -48,9 +48,15 @@ export class OfficeScene extends Phaser.Scene {
     this.unsubs.push(store.subscribe(sync));
     this.unsubs.push(
       store.onEvent((e) => {
-        if (e.type !== "handoff" || !e.targetAgentId) return;
-        const target = store.get().agents[e.targetAgentId];
-        if (target) this.agents.get(e.agentId)?.visit(target.desk, e.summary);
+        if (e.type === "handoff" && e.targetAgentId) {
+          const target = store.get().agents[e.targetAgentId];
+          if (target) this.agents.get(e.agentId)?.visit(target.desk, e.summary);
+        } else if (e.type === "meeting" && e.participants) {
+          e.participants.forEach((id, i) => {
+            const spot = MEETING_SPOTS[i % MEETING_SPOTS.length];
+            this.agents.get(id)?.meet(spot, i === 0 ? "Họp tổng hợp!" : undefined);
+          });
+        }
       }),
     );
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.unsubs.forEach((u) => u()));

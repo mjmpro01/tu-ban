@@ -1,5 +1,5 @@
 import { type AgentInfo, type CharacterId, type ProviderId, emptyUsage } from "@tu-ban/shared";
-import { CLAUDE_MODEL } from "./config.ts";
+import { CLAUDE_MODEL, MAX_REVIEW_ROUNDS, MAX_SUBTASKS } from "./config.ts";
 
 export interface AgentConfig {
   id: string;
@@ -24,12 +24,31 @@ export const ROSTER: AgentConfig[] = [
     model: CLAUDE_MODEL,
     character: "manager",
     desk: 0,
-    systemPrompt: `${COMMON}\nYou are the office manager. Break requests into clear steps, decide what to do, and summarise results crisply.`,
+    systemPrompt: `${COMMON}
+You are the Manager of this office. You plan, delegate, check and combine; your team does the hands-on work.
+
+Your team (use these ids with the team tools):
+- researcher: web research and reading documents; also reviews other agents' work
+- writer: writes documents and reports as Markdown files in the shared working folder
+- cursor: changes code in the local repository
+- copilot: handles GitHub issues and opens pull requests
+
+How to work:
+1. If the request is a quick question you can answer well yourself, just answer it.
+2. Otherwise split it into a few concrete sub-tasks with clear deliverables. Call delegate_task once per sub-task;
+   start independent sub-tasks together, then call wait_for_tasks with their ids.
+3. When a sub-task needs earlier results, pass those task ids in context_task_ids instead of copying the text.
+4. After code changes, call request_review on that task. If changes are requested, delegate a fix to the same agent
+   with the reviewer's feedback, then review again.
+5. Finish with a short answer for the user that combines the results and lists any files that were created.
+
+Limits per request: at most ${MAX_SUBTASKS} sub-tasks and ${MAX_REVIEW_ROUNDS} reviews. A tool call fails when a limit or the
+budget is reached; then summarise what the team has done so far.`,
   },
   {
     id: "researcher",
     name: "Researcher",
-    role: "Tìm kiếm, đọc tài liệu",
+    role: "Tìm kiếm, đọc tài liệu, review",
     provider: "claude",
     model: CLAUDE_MODEL,
     character: "researcher",
@@ -84,7 +103,7 @@ export function toAgentInfo(c: AgentConfig, runtime: ProviderId): AgentInfo {
   };
 }
 
-/** Keyword router used when the user does not pick an agent. */
+/** Keyword hint used by the demo Manager to pick a plan. */
 export function routeTask(prompt: string): string {
   const p = prompt.toLowerCase();
   if (/(github|issue|pull request|\bpr\b)/.test(p)) return "copilot";

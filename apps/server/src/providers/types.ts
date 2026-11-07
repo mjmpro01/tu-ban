@@ -3,6 +3,35 @@ import type { AgentConfig } from "../agents.ts";
 
 export type EmitInput = Omit<AgentEvent, "id" | "ts" | "agentId" | "taskId">;
 
+export interface TeamMember {
+  id: string;
+  name: string;
+  role: string;
+  busy: boolean;
+}
+
+export interface SubtaskOutcome {
+  taskId: string;
+  agentId: string;
+  status: "done" | "error" | "cancelled";
+  result?: string;
+  error?: string;
+}
+
+/**
+ * Coordination API given to the Manager when it works on a user request.
+ * Sub-tasks run on the other agents' queues like any task (with approvals, usage...).
+ */
+export interface TeamApi {
+  members(): TeamMember[];
+  /** Hand work to another agent. Returns the new task id at once (the work runs in the background). */
+  delegate(agentId: string, instructions: string, contextTaskIds?: string[]): string;
+  /** Wait until all the given sub-tasks finish. */
+  waitFor(taskIds: string[]): Promise<SubtaskOutcome[]>;
+  /** Ask a reviewer to check a finished sub-task. */
+  review(taskId: string, focus?: string): Promise<{ approved: boolean; feedback: string; reviewTaskId: string }>;
+}
+
 export interface RunContext {
   task: Task;
   agent: AgentInfo;
@@ -11,6 +40,8 @@ export interface RunContext {
   signal: AbortSignal;
   /** Report progress; drives the dashboard timeline and the character in the office. */
   emit(event: EmitInput): void;
+  /** Present only when the Manager works on a request from the user. */
+  team?: TeamApi;
   /** Ask the human to approve a risky action. Resolves true when approved. */
   requestApproval(tool: string, summary: string, input: unknown): Promise<boolean>;
 }
@@ -44,6 +75,7 @@ export function clip(s: string, n: number): string {
 
 export const sleep = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) return reject(new Error("cancelled"));
     const t = setTimeout(resolve, ms);
     signal?.addEventListener(
       "abort",
