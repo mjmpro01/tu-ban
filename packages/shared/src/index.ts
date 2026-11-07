@@ -45,6 +45,9 @@ export interface AgentInfo {
   requests: number;
 }
 
+/** "review" = a check of another task's result, created by the Manager. */
+export type TaskKind = "task" | "review";
+
 export type TaskStatus = "queued" | "running" | "waiting_approval" | "done" | "error" | "cancelled";
 
 export interface Task {
@@ -54,6 +57,7 @@ export interface Task {
   agentId: string;
   /** Task that delegated this one (Manager hand-off). */
   parentId?: string;
+  kind: TaskKind;
   status: TaskStatus;
   createdAt: number;
   startedAt?: number;
@@ -72,6 +76,7 @@ export type AgentEventType =
   | "handoff"
   | "approval_request"
   | "approval_resolved"
+  | "meeting"
   | "done"
   | "error";
 
@@ -89,6 +94,8 @@ export interface AgentEvent {
   detail?: string;
   /** For hand-offs: the agent receiving the work. */
   targetAgentId?: string;
+  /** For meetings: the agents taking part. */
+  participants?: string[];
   usage?: Usage;
 }
 
@@ -122,6 +129,10 @@ export interface TaskQuery {
   status?: TaskStatus | "active";
   /** Text search in the title and prompt. */
   q?: string;
+  /** Only the sub-tasks of this task. */
+  parentId?: string;
+  /** Only tasks the user created (no sub-tasks). */
+  rootsOnly?: boolean;
 }
 
 export const ACTIVE_STATUSES: TaskStatus[] = ["queued", "running", "waiting_approval"];
@@ -130,6 +141,8 @@ export const ACTIVE_STATUSES: TaskStatus[] = ["queued", "running", "waiting_appr
 export function matchesTaskQuery(t: Task, f: TaskQuery): boolean {
   if (f.before !== undefined && t.createdAt >= f.before) return false;
   if (f.agentId && t.agentId !== f.agentId) return false;
+  if (f.parentId && t.parentId !== f.parentId) return false;
+  if (f.rootsOnly && t.parentId) return false;
   if (f.status === "active" ? !ACTIVE_STATUSES.includes(t.status) : f.status && t.status !== f.status) return false;
   if (f.q) {
     const q = f.q.toLowerCase();

@@ -44,6 +44,7 @@ export const EVENT_ICON: Record<AgentEvent["type"], string> = {
   approval_resolved: "🛡",
   done: "✅",
   error: "⚠",
+  meeting: "👥",
 };
 
 export function TimelineItem({ event, agent }: { event: AgentEvent; agent?: AgentInfo }) {

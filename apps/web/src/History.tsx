@@ -5,7 +5,7 @@ import { Portrait, TASK_LABEL, TimelineItem, fmtCost, fmtDateTime, fmtDuration, 
 
 const PAGE = 30;
 
-type Filters = Required<Pick<TaskQuery, "q">> & { agentId: string; status: string };
+type Filters = Required<Pick<TaskQuery, "q">> & { agentId: string; status: string; withSubtasks: boolean };
 
 const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "", label: "Mọi trạng thái" },
@@ -26,6 +26,7 @@ function toQuery(f: Filters): TaskQuery {
     agentId: f.agentId || undefined,
     status: (f.status || undefined) as TaskQuery["status"],
     q: f.q.trim() || undefined,
+    rootsOnly: f.withSubtasks ? undefined : true,
   };
 }
 
@@ -57,7 +58,7 @@ export function HistoryDialog({ open, onClose }: { open: boolean; onClose: () =>
 function HistoryBody({ onClose }: { onClose: () => void }) {
   const agents = useStore((s) => s.agents);
   const liveTasks = useStore((s) => s.tasks);
-  const [filters, setFilters] = useState<Filters>({ agentId: "", status: "", q: "" });
+  const [filters, setFilters] = useState<Filters>({ agentId: "", status: "", q: "", withSubtasks: false });
   const [debouncedQ, setDebouncedQ] = useState("");
   const [items, setItems] = useState<Task[]>([]);
   const [loading, setLoading] = useState(false);
@@ -71,7 +72,7 @@ function HistoryBody({ onClose }: { onClose: () => void }) {
     return () => clearTimeout(t);
   }, [filters.q]);
 
-  const query = useMemo(() => toQuery({ ...filters, q: debouncedQ }), [filters.agentId, filters.status, debouncedQ]);
+  const query = useMemo(() => toQuery({ ...filters, q: debouncedQ }), [filters.agentId, filters.status, filters.withSubtasks, debouncedQ]);
 
   const load = useCallback(
     async (before?: number) => {
@@ -107,10 +108,9 @@ function HistoryBody({ onClose }: { onClose: () => void }) {
     return [...fresh, ...items.map((t) => liveTasks[t.id] ?? t)];
   }, [items, liveTasks, query]);
 
-  const selected = list.find((t) => t.id === selectedId) ?? null;
 
   return (
-    <div className="history-body" data-view={selected ? "detail" : "list"}>
+    <div className="history-body" data-view={selectedId ? "detail" : "list"}>
       <header className="history-header">
         <h2 id="history-title">Lịch sử task</h2>
         <button type="button" className="icon-button" onClick={onClose} aria-label="Đóng">
@@ -142,6 +142,14 @@ function HistoryBody({ onClose }: { onClose: () => void }) {
               </option>
             ))}
           </select>
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              checked={filters.withSubtasks}
+              onChange={(e) => setFilters({ ...filters, withSubtasks: e.target.checked })}
+            />
+            Hiện việc con
+          </label>
         </div>
 
         {error && <p className="error">{error}</p>}
@@ -162,7 +170,11 @@ function HistoryBody({ onClose }: { onClose: () => void }) {
                   <div className="history-item-body">
                     <div className="history-item-top">
                       <span className={`task-status ts-${t.status}`}>{TASK_LABEL[t.status]}</span>
-                      <strong>{t.title}</strong>
+                      {t.kind === "review" && <span className="kind-badge">Review</span>}
+                      <strong>
+                        {t.parentId ? "↳ " : ""}
+                        {t.title}
+                      </strong>
                     </div>
                     <div className="muted">
                       {agent?.name ?? t.agentId} · {fmtDateTime(t.createdAt)}
@@ -185,8 +197,14 @@ function HistoryBody({ onClose }: { onClose: () => void }) {
       </section>
 
       <section className="history-detail" aria-label="Chi tiết task">
-        {selected ? (
-          <TaskDetail task={selected} onBack={() => setSelectedId(null)} />
+        {selectedId ? (
+          <TaskDetailLoader
+            key={selectedId}
+            taskId={selectedId}
+            known={list.find((t) => t.id === selectedId)}
+            onSelect={setSelectedId}
+            onBack={() => setSelectedId(null)}
+          />
         ) : (
           <p className="muted empty">Chọn một task bên trái để xem chi tiết.</p>
         )}
@@ -195,8 +213,56 @@ function HistoryBody({ onClose }: { onClose: () => void }) {
   );
 }
 
-function TaskDetail({ task, onBack }: { task: Task; onBack: () => void }) {
+/** Finds the task (list, live store or server) and its sub-tasks, then shows the detail. */
+function TaskDetailLoader(props: { taskId: string; known?: Task; onSelect: (id: string) => void; onBack: () => void }) {
+  const live = useStore((s) => s.tasks);
+  const [fetched, setFetched] = useState<Task | null>(null);
+  const [children, setChildren] = useState<Task[]>([]);
+  const [error, setError] = useState("");
+  const task = live[props.taskId] ?? props.known ?? fetched;
+
+  useEffect(() => {
+    let alive = true;
+    if (!props.known && !live[props.taskId])
+      getJson<Task>(`/api/tasks/${props.taskId}`)
+        .then((t) => alive && setFetched(t))
+        .catch((e: Error) => alive && setError(`Không tải được task (${e.message})`));
+    getJson<Task[]>(`/api/tasks?parentId=${props.taskId}&limit=100`)
+      .then((list) => alive && setChildren(list))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [props.taskId]);
+
+  // live copies win; new sub-tasks appear while the Manager delegates
+  const subtasks = useMemo(() => {
+    const byId = new Map(children.map((c) => [c.id, c]));
+    for (const t of Object.values(live)) if (t.parentId === props.taskId) byId.set(t.id, t);
+    return [...byId.values()].sort((a, b) => a.createdAt - b.createdAt);
+  }, [children, live, props.taskId]);
+
+  if (error) return <p className="error">{error}</p>;
+  if (!task) return <p className="muted empty">Đang tải…</p>;
+  return <TaskDetail task={task} subtasks={subtasks} onSelect={props.onSelect} onBack={props.onBack} />;
+}
+
+function TaskDetail({
+  task,
+  subtasks,
+  onSelect,
+  onBack,
+}: {
+  task: Task;
+  subtasks: Task[];
+  onSelect: (id: string) => void;
+  onBack: () => void;
+}) {
   const agents = useStore((s) => s.agents);
+  const live = useStore((s) => s.tasks);
+  const parent = task.parentId ? live[task.parentId] : undefined;
+  const teamCost = subtasks.reduce((n, t) => n + t.usage.costUsd, task.usage.costUsd);
+  const teamTokens = subtasks.reduce((n, t) => n + t.usage.tokensIn + t.usage.tokensOut, task.usage.tokensIn + task.usage.tokensOut);
   const agent = agents[task.agentId];
   const [events, setEvents] = useState<AgentEvent[] | null>(null);
   const [error, setError] = useState("");
@@ -236,7 +302,15 @@ function TaskDetail({ task, onBack }: { task: Task; onBack: () => void }) {
         <div>
           <span className={`task-status ts-${task.status}`}>{TASK_LABEL[task.status]}</span>
           <h3>{task.title}</h3>
-          <div className="muted">{agent?.name ?? task.agentId}</div>
+          <div className="muted">
+            {agent?.name ?? task.agentId}
+            {task.kind === "review" && " · Review"}
+          </div>
+          {task.parentId && (
+            <button type="button" className="link" onClick={() => onSelect(task.parentId!)}>
+              ↑ Thuộc yêu cầu: {parent?.title ?? "xem task cha"}
+            </button>
+          )}
         </div>
       </header>
 
@@ -253,12 +327,12 @@ function TaskDetail({ task, onBack }: { task: Task; onBack: () => void }) {
           </dd>
         </div>
         <div>
-          <dt>Token</dt>
-          <dd>{fmtTokens(task.usage.tokensIn + task.usage.tokensOut)}</dd>
+          <dt>{subtasks.length ? "Token (cả nhóm)" : "Token"}</dt>
+          <dd>{fmtTokens(subtasks.length ? teamTokens : task.usage.tokensIn + task.usage.tokensOut)}</dd>
         </div>
         <div>
-          <dt>Chi phí</dt>
-          <dd>{fmtCost(task.usage.costUsd)}</dd>
+          <dt>{subtasks.length ? "Chi phí (cả nhóm)" : "Chi phí"}</dt>
+          <dd>{fmtCost(subtasks.length ? teamCost : task.usage.costUsd)}</dd>
         </div>
       </dl>
 
@@ -273,6 +347,33 @@ function TaskDetail({ task, onBack }: { task: Task; onBack: () => void }) {
         )}
         {rerun && <span className="muted" role="status">{rerun}</span>}
       </div>
+
+      {subtasks.length > 0 && (
+        <>
+          <h4>Việc con ({subtasks.length})</h4>
+          <ul className="subtask-list">
+            {subtasks.map((c) => (
+              <li key={c.id}>
+                <button type="button" className="history-item" onClick={() => onSelect(c.id)}>
+                  {agents[c.agentId] && <Portrait agent={agents[c.agentId]} size={24} />}
+                  <div className="history-item-body">
+                    <div className="history-item-top">
+                      <span className={`task-status ts-${c.status}`}>{TASK_LABEL[c.status]}</span>
+                      {c.kind === "review" && <span className="kind-badge">Review</span>}
+                      <strong>{c.title}</strong>
+                    </div>
+                    <div className="muted">
+                      {agents[c.agentId]?.name ?? c.agentId}
+                      {c.startedAt && c.finishedAt ? ` · ${fmtDuration(c.finishedAt - c.startedAt)}` : ""}
+                      {c.usage.costUsd > 0 ? ` · ${fmtCost(c.usage.costUsd)}` : ""}
+                    </div>
+                  </div>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
 
       <h4>Yêu cầu</h4>
       <pre>{task.prompt}</pre>

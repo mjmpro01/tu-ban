@@ -7,9 +7,11 @@ type Pose = "type" | "think" | "doze" | "stand" | "ask";
 type BubbleStyle = 0 | 1 | 2 | 3; // speech, thought, alert, error (frame order in bubbles.png)
 
 interface Place {
-  kind: "seat" | "deskfront" | "poi" | "visit";
+  kind: "seat" | "deskfront" | "poi" | "visit" | "spot";
   poi?: PoiName;
   desk?: number;
+  tx?: number;
+  ty?: number;
 }
 
 interface Behaviour {
@@ -24,6 +26,8 @@ const WALK_SPEED = 48; // px per second
 const PLACE_DWELL_MS = 5000; // minimum time at a place before walking somewhere else
 const IDLE_SPOTS: PoiName[] = ["coffee", "water", "sofa", "bookshelf"];
 const FONT = "'Segoe UI', 'Noto Sans', 'Helvetica Neue', Arial, sans-serif";
+
+const placeKey = (p: Place) => `${p.kind}:${p.poi ?? ""}:${p.desk ?? ""}:${p.tx ?? ""}:${p.ty ?? ""}`;
 
 export class AgentSprite {
   readonly sprite: Phaser.GameObjects.Sprite;
@@ -42,6 +46,9 @@ export class AgentSprite {
   private lastChange = 0;
   private pendingTimer?: Phaser.Time.TimerEvent;
   private override?: Behaviour;
+  private overrideTimer?: Phaser.Time.TimerEvent;
+  private overridePriority = 0;
+  private queuedOverride?: { b: Behaviour; ms: number; priority: number };
   private idleSpot: PoiName | "desk" = "desk";
   private idleTimer?: Phaser.Time.TimerEvent;
   private bubbleTimer?: Phaser.Time.TimerEvent;
@@ -98,18 +105,41 @@ export class AgentSprite {
     this.label.setVisible(on);
   }
 
-  /** Walk to another agent's desk to hand work over, then carry on. */
+  /** Walk to another agent's desk to hand work over (or bring results back), then carry on. */
   visit(desk: number, text: string) {
-    this.override = {
-      place: { kind: "visit", desk },
-      pose: "stand",
-      face: "left",
-      bubble: { text, style: 0 },
-    };
+    this.setOverride({ place: { kind: "visit", desk }, pose: "stand", face: "left", bubble: { text, style: 0 } }, 9000, 1);
+  }
+
+  /** Join a meeting at the given spot for a while. */
+  meet(spot: { tx: number; ty: number; face: Face }, text?: string) {
+    this.setOverride(
+      { place: { kind: "spot", tx: spot.tx, ty: spot.ty }, pose: "stand", face: spot.face, emote: "handoff", bubble: text ? { text, style: 0 } : undefined },
+      12000,
+      2,
+    );
+  }
+
+  /**
+   * Temporarily replace the normal behaviour (visits, meetings). A meeting outranks a visit:
+   * a visit requested during a meeting waits until the meeting ends.
+   */
+  private setOverride(b: Behaviour, ms: number, priority: number) {
+    if (this.override && this.overridePriority > priority) {
+      this.queuedOverride = { b, ms, priority };
+      return;
+    }
+    this.overrideTimer?.remove();
+    this.override = b;
+    this.overridePriority = priority;
     this.apply(true);
-    this.scene.time.delayedCall(9000, () => {
+    this.overrideTimer = this.scene.time.delayedCall(ms, () => {
       this.override = undefined;
-      this.apply(true);
+      this.overrideTimer = undefined;
+      this.overridePriority = 0;
+      const next = this.queuedOverride;
+      this.queuedOverride = undefined;
+      if (next) this.setOverride(next.b, next.ms, next.priority);
+      else this.apply(true);
     });
   }
 
@@ -185,7 +215,7 @@ export class AgentSprite {
     const b = this.behaviour();
     this.showEmote(b.emote);
     this.showBubble(b.bubble);
-    const key = `${b.place.kind}:${b.place.poi ?? ""}:${b.place.desk ?? ""}`;
+    const key = placeKey(b.place);
     if (key === this.placeKey) {
       this.pendingTimer?.remove();
       this.pendingTimer = undefined;
@@ -227,6 +257,9 @@ export class AgentSprite {
       case "visit":
         tile = deskVisitor(b.place.desk!);
         break;
+      case "spot":
+        tile = { tx: b.place.tx!, ty: b.place.ty! };
+        break;
       default:
         tile = POIS[b.place.poi!];
     }
@@ -239,7 +272,7 @@ export class AgentSprite {
       this.walking = false;
       // pose for whatever the agent is doing *now* (it may have changed while walking)
       const now = this.behaviour();
-      this.pose(`${now.place.kind}:${now.place.poi ?? ""}:${now.place.desk ?? ""}` === this.placeKey ? now : b);
+      this.pose(placeKey(now.place) === this.placeKey ? now : b);
     });
   }
 

@@ -1,5 +1,5 @@
-import type { AgentInfo, Approval } from "@tu-ban/shared";
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import type { AgentInfo, Approval, Task } from "@tu-ban/shared";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { createGame } from "./game/OfficeScene";
 import { HistoryDialog } from "./History";
 import { actions, store, useStore } from "./store";
@@ -260,36 +260,57 @@ function Timeline({ agentId }: { agentId: string | null }) {
 
 function TaskList({ agentId }: { agentId: string | null }) {
   const tasks = useStore((s) => s.tasks);
-  const agents = useStore((s) => s.agents);
-  const list = Object.values(tasks)
-    .filter((t) => !agentId || t.agentId === agentId)
+  const all = Object.values(tasks);
+  const childrenOf = (id: string) => all.filter((t) => t.parentId === id).sort((a, b) => a.createdAt - b.createdAt);
+  // Filtered by agent: flat list of that agent's work. Otherwise: requests with their sub-tasks underneath.
+  const list = all
+    .filter((t) => (agentId ? t.agentId === agentId : !t.parentId || !tasks[t.parentId]))
     .sort((a, b) => b.createdAt - a.createdAt);
   if (!list.length) return <p className="muted empty">Chưa có task nào.</p>;
   return (
     <ul className="tasks">
       {list.map((t) => (
-        <li key={t.id} className="task">
-          <div className="task-head">
-            <span className={`task-status ts-${t.status}`}>{TASK_LABEL[t.status]}</span>
-            <strong>{t.title}</strong>
-          </div>
-          <div className="muted">
-            {agents[t.agentId]?.name} · {fmtTime(t.createdAt)}
-            {t.usage.costUsd > 0 && ` · ${fmtCost(t.usage.costUsd)}`}
-          </div>
-          {(t.result || t.error) && (
-            <details>
-              <summary>{t.error ? "Lỗi" : "Kết quả"}</summary>
-              <pre>{t.error ?? t.result}</pre>
-            </details>
+        <TaskItem key={t.id} task={t} parent={agentId && t.parentId ? tasks[t.parentId] : undefined}>
+          {!agentId && childrenOf(t.id).length > 0 && (
+            <ul className="subtasks">
+              {childrenOf(t.id).map((c) => (
+                <TaskItem key={c.id} task={c} compact />
+              ))}
+            </ul>
           )}
-          {(t.status === "queued" || t.status === "running" || t.status === "waiting_approval") && (
-            <button type="button" className="link" onClick={() => actions.cancelTask(t.id)}>
-              Huỷ
-            </button>
-          )}
-        </li>
+        </TaskItem>
       ))}
     </ul>
+  );
+}
+
+function TaskItem({ task: t, parent, compact, children }: { task: Task; parent?: Task; compact?: boolean; children?: ReactNode }) {
+  const agents = useStore((s) => s.agents);
+  const active = t.status === "queued" || t.status === "running" || t.status === "waiting_approval";
+  return (
+    <li className={`task ${compact ? "task-compact" : ""}`}>
+      <div className="task-head">
+        <span className={`task-status ts-${t.status}`}>{TASK_LABEL[t.status]}</span>
+        {t.kind === "review" && <span className="kind-badge">Review</span>}
+        <strong>{t.title}</strong>
+      </div>
+      <div className="muted">
+        {agents[t.agentId]?.name} · {fmtTime(t.createdAt)}
+        {t.usage.costUsd > 0 && ` · ${fmtCost(t.usage.costUsd)}`}
+        {parent && ` · thuộc "${parent.title}"`}
+      </div>
+      {(t.result || t.error) && (
+        <details>
+          <summary>{t.error ? "Lỗi" : "Kết quả"}</summary>
+          <pre>{t.error ?? t.result}</pre>
+        </details>
+      )}
+      {active && !compact && (
+        <button type="button" className="link" onClick={() => actions.cancelTask(t.id)}>
+          Huỷ{children ? " (cả việc con)" : ""}
+        </button>
+      )}
+      {children}
+    </li>
   );
 }

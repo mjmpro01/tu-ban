@@ -281,3 +281,12 @@ button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2p
   .detail .back { display: inline-block; }
   .detail-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* ---------------------------------------------------------------- task tree */
+.subtasks { list-style: none; margin: 6px 0 0 6px; padding: 0 0 0 10px; border-left: 2px solid var(--border); }
+.task-compact { padding: 5px 2px; font-size: 12px; border-bottom: 0; }
+.task-compact .task-head strong { font-weight: 600; }
+.kind-badge { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 4px; color: var(--copilot); border: 1px solid var(--copilot); flex: none; }
+.event-meeting .event-summary { color: var(--accent); }
+.checkbox { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); grid-column: 1 / -1; }
+.subtask-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }

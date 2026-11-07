@@ -1,10 +1,80 @@
-import { type CanUseTool, type SDKMessage, query } from "@anthropic-ai/claude-agent-sdk";
+import { type CanUseTool, type SDKMessage, createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
 import { toolActivity } from "@tu-ban/shared";
 import { MAX_BUDGET_USD, MAX_TURNS } from "../config.ts";
-import { type AgentProvider, type RunContext, type RunResult, clip, summarizeToolInput } from "./types.ts";
+import { type AgentProvider, type RunContext, type RunResult, type TeamApi, clip, summarizeToolInput } from "./types.ts";
 
 /** Tools that only read: run them without asking the human. Everything else needs approval. */
 const READ_ONLY_TOOLS = new Set(["Read", "Glob", "Grep", "WebSearch", "WebFetch", "TodoWrite", "LS", "NotebookRead"]);
+
+const TEAM_SERVER = "team";
+const TEAM_PREFIX = `mcp__${TEAM_SERVER}__`;
+/** How much of each sub-task result goes back to the Manager in one tool result. */
+const RESULT_CHARS = 8000;
+
+const text = (t: string, isError = false) => ({ content: [{ type: "text" as const, text: t }], isError });
+
+/** In-process MCP server exposing the team API to the Manager. */
+function teamServer(team: TeamApi) {
+  const ids = team.members().map((m) => m.id) as [string, ...string[]];
+  const guard =
+    <A>(fn: (args: A) => Promise<ReturnType<typeof text>>) =>
+    async (args: A) => {
+      try {
+        return await fn(args);
+      } catch (e) {
+        return text(`Error: ${(e as Error).message}`, true);
+      }
+    };
+  return createSdkMcpServer({
+    name: TEAM_SERVER,
+    alwaysLoad: true,
+    // waiting for teammates can take a long time
+    timeout: 60 * 60 * 1000,
+    tools: [
+      tool(
+        "delegate_task",
+        `Give a sub-task to a team member. Returns the new task id immediately; the work runs in the background.
+Team: ${team
+          .members()
+          .map((m) => `${m.id} (${m.role})`)
+          .join("; ")}.`,
+        {
+          agent_id: z.enum(ids).describe("Who does the work"),
+          instructions: z.string().min(10).describe("What to do and what to deliver, self-contained"),
+          context_task_ids: z.array(z.string()).optional().describe("Earlier task ids whose results this sub-task needs"),
+        },
+        guard(async (a) => {
+          const id = team.delegate(a.agent_id, a.instructions, a.context_task_ids);
+          return text(`Delegated to ${a.agent_id}. task_id: ${id}`);
+        }),
+      ),
+      tool(
+        "wait_for_tasks",
+        "Wait until the given sub-tasks finish and return their results.",
+        { task_ids: z.array(z.string()).min(1) },
+        guard(async (a) => {
+          const results = await team.waitFor(a.task_ids);
+          return text(
+            results
+              .map((r) => `## ${r.agentId} — task ${r.taskId} — ${r.status}\n${clip(r.result ?? r.error ?? "", RESULT_CHARS)}`)
+              .join("\n\n"),
+          );
+        }),
+      ),
+      tool(
+        "request_review",
+        "Ask a reviewer to check a finished sub-task (use after code changes). Returns APPROVED or CHANGES_REQUESTED with feedback.",
+        { task_id: z.string(), focus: z.string().optional().describe("What the reviewer should look at closely") },
+        guard(async (a) => {
+          const r = await team.review(a.task_id, a.focus);
+          return text(`${r.approved ? "APPROVED" : "CHANGES_REQUESTED"} (review task ${r.reviewTaskId})
+${clip(r.feedback, RESULT_CHARS)}`);
+        }),
+      ),
+    ],
+  });
+}
 
 type Block = {
   type: string;
@@ -40,7 +110,7 @@ export const claudeProvider: AgentProvider = {
     const toolNames = new Map<string, string>();
 
     const canUseTool: CanUseTool = async (toolName, input) => {
-      if (READ_ONLY_TOOLS.has(toolName)) return { behavior: "allow", updatedInput: input };
+      if (READ_ONLY_TOOLS.has(toolName) || toolName.startsWith(TEAM_PREFIX)) return { behavior: "allow", updatedInput: input };
       const ok = await ctx.requestApproval(toolName, summarizeToolInput(toolName, input), input);
       return ok
         ? { behavior: "allow", updatedInput: input }
@@ -60,6 +130,7 @@ export const claudeProvider: AgentProvider = {
         maxTurns: MAX_TURNS,
         maxBudgetUsd: MAX_BUDGET_USD,
         abortController,
+        ...(ctx.team ? { mcpServers: { [TEAM_SERVER]: teamServer(ctx.team) } } : {}),
       },
     });
 
@@ -73,6 +144,7 @@ export const claudeProvider: AgentProvider = {
             ctx.emit({ type: "message", activity: "write", summary: clip(block.text, 120), detail: block.text });
           } else if (block.type === "tool_use" && block.id && block.name) {
             toolNames.set(block.id, block.name);
+            if (block.name.startsWith(TEAM_PREFIX)) continue;
             ctx.emit({
               type: "tool_start",
               activity: toolActivity(block.name),
@@ -88,6 +160,7 @@ export const claudeProvider: AgentProvider = {
         for (const block of content as Block[]) {
           if (block.type !== "tool_result" || !block.tool_use_id) continue;
           const tool = toolNames.get(block.tool_use_id) ?? "tool";
+          if (tool.startsWith(TEAM_PREFIX)) continue;
           const text = blockText(block.content);
           ctx.emit({
             type: "tool_end",

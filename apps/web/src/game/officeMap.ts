@@ -107,6 +107,16 @@ export const POIS: Record<PoiName, { tx: number; ty: number; face: "up" | "down"
   whiteboard: { tx: 18, ty: 9, face: "up" },
 };
 
+/** Where agents stand around the meeting table (first spot = the Manager's). */
+export const MEETING_SPOTS: { tx: number; ty: number; face: "up" | "down" }[] = [
+  { tx: 18, ty: 10, face: "down" },
+  { tx: 19, ty: 13, face: "up" },
+  { tx: 17, ty: 13, face: "up" },
+  { tx: 20, ty: 10, face: "down" },
+  { tx: 18, ty: 13, face: "up" },
+  { tx: 20, ty: 13, face: "up" },
+];
+
 /** true = walkable. */
 export function walkGrid(frameSize: (frame: string) => { w: number; h: number }): boolean[][] {
   const grid = Array.from({ length: MAP_H }, (_, y) =>
