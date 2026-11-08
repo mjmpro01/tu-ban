@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentInfo, Task, ToolMode, Usage } from "@tu-ban/shared";
+import type { AgentEvent, AgentInfo, MemoryItem, MemoryScope, Task, ToolMode, Usage } from "@tu-ban/shared";
 import type { AgentConfig } from "../agents.ts";
 
 export type EmitInput = Omit<AgentEvent, "id" | "ts" | "agentId" | "taskId">;
@@ -32,6 +32,13 @@ export interface TeamApi {
   review(taskId: string, focus?: string): Promise<{ approved: boolean; feedback: string; reviewTaskId: string }>;
 }
 
+/** The shared memory, already bound to this agent and the request it works on. */
+export interface MemoryApi {
+  /** scope "all" = the office memory, this agent's own notes and this request's notes. */
+  search(query: string, scope?: MemoryScope | "all", limit?: number): Promise<MemoryItem[]>;
+  save(text: string, scope: MemoryScope): Promise<MemoryItem[]>;
+}
+
 export interface RunContext {
   task: Task;
   agent: AgentInfo;
@@ -48,6 +55,10 @@ export interface RunContext {
   limits: { maxBudgetUsd: number; maxTurns: number };
   /** Skills from the library this agent may use (only ones that still exist). */
   skills: string[];
+  /** Shared memory tools. */
+  memory?: MemoryApi;
+  /** Memories recalled for this task, to add to the agent's instructions. */
+  memoryContext?: string;
   /** Ask the human to approve a risky action. Resolves true when approved. */
   requestApproval(tool: string, summary: string, input: unknown): Promise<boolean>;
 }

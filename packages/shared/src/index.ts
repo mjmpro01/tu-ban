@@ -185,6 +185,7 @@ export type AgentEventType =
   | "approval_resolved"
   | "meeting"
   | "config"
+  | "memory"
   | "done"
   | "error";
 
@@ -285,6 +286,61 @@ export interface NotificationStatus {
   channels: Record<"telegram" | "slack", { configured: boolean; lastError?: string }>;
   publicUrl: string;
   lastSentAt?: number;
+}
+
+// ---------------------------------------------------------------- shared memory
+/**
+ * office: everyone shares it. agent: one agent's own notes. request: notes for one user request
+ * (the Manager's task and everything it delegated), so team members can pass context to each other.
+ */
+export type MemoryScope = "office" | "agent" | "request";
+export const MEMORY_SCOPES: MemoryScope[] = ["office", "agent", "request"];
+
+export interface MemoryItem {
+  id: string;
+  text: string;
+  scope: MemoryScope;
+  /** For agent memories: whose they are. Otherwise the agent that saved it, if any. */
+  agentId?: string;
+  /** For request memories: the root task id. */
+  runId?: string;
+  /** Who added it: an agent id, a person's name, or "auto" for automatic saves. */
+  createdBy?: string;
+  taskId?: string;
+  createdAt?: number;
+  updatedAt?: number;
+  /** Relevance (0..1) in search results. */
+  score?: number;
+}
+
+export interface MemorySettings {
+  /** Put the most relevant memories into every task's prompt. */
+  autoRecall: boolean;
+  /** Save what finished user requests produced into the office memory. */
+  autoSave: boolean;
+  /** How many memories auto-recall adds at most. */
+  recallLimit: number;
+}
+
+export const DEFAULT_MEMORY_SETTINGS: MemorySettings = { autoRecall: true, autoSave: true, recallLimit: 5 };
+
+export interface MemoryStatus {
+  /** mem0: a Mem0 server (vector search). local: keyword search in this server's database. */
+  backend: "mem0" | "local";
+  ok: boolean;
+  lastError?: string;
+  settings: MemorySettings;
+  /** Models Mem0 uses (through 9router or the embedding server), for display. */
+  llmModel?: string;
+  embedModel?: string;
+}
+
+export interface MemoryQuery {
+  q?: string;
+  scope?: MemoryScope;
+  agentId?: string;
+  runId?: string;
+  limit?: number;
 }
 
 export interface Snapshot {

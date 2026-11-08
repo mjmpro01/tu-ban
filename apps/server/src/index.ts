@@ -9,6 +9,8 @@ import {
   CSRF_HEADER,
   type ClientToServer,
   type MeResponse,
+  type MemoryQuery,
+  type MemoryScope,
   type ServerToClient,
   type TaskQuery,
   type UserInfo,
@@ -19,6 +21,7 @@ import { Server } from "socket.io";
 import { AuthError, AuthService, MemoryAuthRepo, SESSION_COOKIE, SESSION_TTL_MS } from "./auth.ts";
 import { ADMIN_PASSWORD, ADMIN_USERNAME, COOKIE_SECURE, DATABASE_URL, MODE, PORT, ROOT, WORKDIR } from "./config.ts";
 import { Budget } from "./budget.ts";
+import { Memory } from "./memory.ts";
 import { Notifier } from "./notifier.ts";
 import { PgPersistence } from "./db.ts";
 import { type Actor, Orchestrator } from "./orchestrator.ts";
@@ -43,8 +46,10 @@ if (!db) console.warn("DATABASE_URL chưa đặt: dữ liệu chỉ nằm trong 
 const store = new Store(db);
 const budget = new Budget(store);
 await budget.init();
-const orchestrator = new Orchestrator(store, budget);
+const memory = new Memory(store, () => [...store.agents.keys()]);
+const orchestrator = new Orchestrator(store, budget, memory);
 await orchestrator.init();
+await memory.init();
 const notifier = new Notifier(store, budget);
 await notifier.init();
 
@@ -71,6 +76,7 @@ function adminOnly(method: string, path: string) {
   return (
     /^\/api\/(agents|skills|users)(\/|$)/.test(path) ||
     path.startsWith("/api/settings") ||
+    (method !== "GET" && path.startsWith("/api/memory")) ||
     (method === "POST" && path.startsWith("/api/approvals/"))
   );
 }
@@ -210,6 +216,39 @@ app.put<{ Body: Partial<BudgetSettings> }>("/api/settings/budget", async (req) =
 app.get("/api/settings/notifications", async () => notifier.status());
 app.put<{ Body: Partial<NotificationEvents> }>("/api/settings/notifications", async (req) => notifier.updateEvents(req.body ?? {}));
 app.post("/api/settings/notifications/test", async (req) => notifier.test(req.user!.displayName));
+
+// shared memory: everyone reads, admins edit (agents write through their memory tools)
+app.get("/api/memory/status", async () => memory.status());
+app.get<{ Querystring: Record<string, string | undefined> }>("/api/memory", async (req) => {
+  const q = req.query;
+  const query: MemoryQuery = {
+    q: q.q?.slice(0, 500),
+    scope: (q.scope || undefined) as MemoryScope | undefined,
+    agentId: q.agentId || undefined,
+    runId: q.runId || undefined,
+    limit: q.limit ? Number(q.limit) : undefined,
+  };
+  return memory.query(query);
+});
+app.post<{ Body: { text?: string; scope?: MemoryScope; agentId?: string; runId?: string } }>("/api/memory", async (req) => {
+  const b = req.body ?? {};
+  const saved = await memory.add({
+    text: b.text ?? "",
+    scope: b.scope ?? "office",
+    agentId: b.agentId,
+    runId: b.runId,
+    createdBy: req.user!.displayName,
+  });
+  console.log(`[memory] ${req.user!.displayName} thêm ${saved.length} ghi nhớ (${b.scope ?? "office"})`);
+  return saved;
+});
+app.put<{ Params: { id: string }; Body: { text?: string } }>("/api/memory/:id", async (req) => memory.update(req.params.id, req.body?.text));
+app.delete<{ Params: { id: string } }>("/api/memory/:id", async (req) => {
+  await memory.remove(req.params.id);
+  console.log(`[memory] ${req.user!.displayName} xoá ghi nhớ ${req.params.id}`);
+  return { ok: true };
+});
+app.put("/api/settings/memory", async (req) => memory.updateSettings(req.body ?? {}));
 
 // task history
 app.get<{ Querystring: Record<string, string | undefined> }>("/api/tasks", async (req) => {

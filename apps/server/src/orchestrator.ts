@@ -6,6 +6,7 @@ import {
   type AgentSettings,
   type CreateTaskInput,
   type ProviderId,
+  type MemoryScope,
   type Task,
   type TaskKind,
   type Usage,
@@ -25,6 +26,7 @@ import {
   validateSettings,
 } from "./agents.ts";
 import type { Budget } from "./budget.ts";
+import { type Memory, recallSection } from "./memory.ts";
 import { MODE, WORKDIR } from "./config.ts";
 import { claudeProvider } from "./providers/claude.ts";
 import { copilotProvider } from "./providers/copilot.ts";
@@ -82,6 +84,7 @@ export class Orchestrator {
   constructor(
     private store: Store,
     private budget: Budget,
+    private memory?: Memory,
   ) {}
 
   async init() {
@@ -506,6 +509,98 @@ export class Orchestrator {
     };
   }
 
+  // ---------------------------------------------------------------- memory
+  private memoryApi(memory: Memory, agentId: string, runId: string, taskId: string, emit: (e: EmitInput) => void) {
+    const label: Record<MemoryScope, string> = { office: "chung", agent: "riêng", request: "cho cả nhóm" };
+    return {
+      search: async (query: string, scope: MemoryScope | "all" = "all", limit?: number) => {
+        const items =
+          scope === "all"
+            ? await memory.recall(query, { agentId, runId }, limit ?? 8)
+            : await memory.query({ q: query, scope, agentId: scope === "agent" ? agentId : undefined, runId, limit: limit ?? 8 });
+        emit({
+          type: "memory",
+          activity: "search",
+          tool: "memory_search",
+          summary: `Tra bộ nhớ: "${clip(query, 50)}" → ${items.length} kết quả`,
+          detail: items.map((m) => `- ${m.text}`).join("\n") || undefined,
+        });
+        return items;
+      },
+      save: async (text: string, scope: MemoryScope) => {
+        const saved = await memory.add({ text, scope, agentId, runId, createdBy: agentId, taskId });
+        emit({
+          type: "memory",
+          activity: "write",
+          tool: "memory_save",
+          summary: `Ghi nhớ (${label[scope]}): ${clip(text, 70)}`,
+          detail: text,
+        });
+        return saved;
+      },
+    };
+  }
+
+  /** Find what the office already knows about this task and hand it to the agent. */
+  private async autoRecall(task: Task, agentId: string, runId: string, emit: (e: EmitInput) => void) {
+    if (!this.memory?.settings.autoRecall || task.kind === "review") return undefined;
+    try {
+      // search with the work itself, not the wrapper text added around delegated work
+      const query = task.prompt
+        .replace(/^\[Việc do Manager giao[^\n]*\n+/, "")
+        .split(/\n## Bối cảnh/)[0];
+      const items = await this.memory.recall(clip(query, 500), { agentId, runId });
+      if (!items.length) return undefined;
+      emit({
+        type: "memory",
+        activity: "search",
+        summary: `Nhớ lại ${items.length} điều liên quan`,
+        detail: items.map((m) => `- [${m.scope}] ${m.text}`).join("\n"),
+      });
+      return recallSection(items);
+    } catch (e) {
+      console.warn(`[memory] không nhắc lại được: ${(e as Error).message}`);
+      return undefined;
+    }
+  }
+
+  /** Keep what a finished user request produced, so later requests (and other agents) can build on it. */
+  private async autoSave(task: Task, result: string) {
+    const memory = this.memory;
+    if (!memory?.settings.autoSave || !result.trim()) return;
+    try {
+      const saved = memory.canInfer
+        ? await memory.add({
+            text: result.slice(0, 4000),
+            scope: "office",
+            createdBy: "auto",
+            taskId: task.id,
+            infer: true,
+            messages: [
+              { role: "user", content: clip(task.prompt, 2000) },
+              { role: "assistant", content: result.slice(0, 6000) },
+            ],
+          })
+        : await memory.add({
+            text: `Yêu cầu "${clip(task.title, 120)}" (${new Date(task.createdAt).toISOString().slice(0, 10)}): ${clip(result, 900)}`,
+            scope: "office",
+            createdBy: "auto",
+            taskId: task.id,
+          });
+      if (saved.length)
+        this.store.addEvent({
+          agentId: task.agentId,
+          taskId: task.id,
+          type: "memory",
+          activity: "done",
+          summary: `Đã ghi ${saved.length} điều vào bộ nhớ chung`,
+          detail: saved.map((m) => `- ${m.text}`).join("\n"),
+        });
+    } catch (e) {
+      console.warn(`[memory] không tự ghi nhớ được: ${(e as Error).message}`);
+    }
+  }
+
   // ---------------------------------------------------------------- running
   private pump(agentId: string) {
     if (this.running.has(agentId)) return;
@@ -587,9 +682,14 @@ export class Orchestrator {
         const group = toolGroupOf(tool);
         return group ? config.tools[group] : "ask";
       };
+      const runId = this.rootOf(task).id;
+      const memory = this.memory ? this.memoryApi(this.memory, agent.id, runId, taskId, emit) : undefined;
+      const memoryContext = await this.autoRecall(task, agent.id, runId, emit);
       const { result, usage } = await provider.run({
         task,
         agent,
+        memory,
+        memoryContext,
         skills,
         toolMode,
         limits,
@@ -608,6 +708,7 @@ export class Orchestrator {
       this.finish(taskId, { status: "done", finishedAt: Date.now(), result, usage: usage ?? emptyUsage() });
       this.store.patchAgent(agent.id, { status: "idle", activity: "done", summary: "Xong việc!", usage: addUsage(a.usage, usage) });
       this.store.addEvent({ agentId: agent.id, taskId, type: "done", activity: "done", summary: `Xong: ${task.title}`, detail: result, usage });
+      if (!task.parentId && task.kind === "task") void this.autoSave(task, result);
     } catch (err) {
       const cancelled = controller.signal.aborted;
       const message = err instanceof Error ? err.message : String(err);

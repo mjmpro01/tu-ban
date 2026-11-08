@@ -107,6 +107,14 @@ export const mockProvider: AgentProvider = {
         ctx.emit({ type: "tool_end", activity: remote ? "remote" : "thinking", tool: step.tool, summary: `${step.tool} xong` });
       }
     }
+    // the Researcher leaves a note for teammates, like a real agent would with memory_save
+    if (ctx.memory && ctx.agent.id === "researcher" && ctx.task.kind !== "review") {
+      const scope = ctx.task.parentId ? "request" : "agent";
+      await wait(1000);
+      await ctx.memory
+        .save(`(demo) Researcher đã tìm hiểu "${clip(ctx.task.title, 80)}": nguồn chính là tài liệu chính thức và 3 bài so sánh gần đây.`, scope)
+        .catch(() => {});
+    }
     const result =
       ctx.task.kind === "review"
         ? reviewVerdict(ctx.task.prompt)

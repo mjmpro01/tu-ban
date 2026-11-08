@@ -4,6 +4,7 @@ import {
   type AgentSettings,
   type AgentStats,
   type DayStats,
+  type MemoryItem,
   type Approval,
   type Task,
   type TaskQuery,
@@ -27,6 +28,9 @@ export interface Persistence {
   deleteAgentSettings(agentId: string): Promise<void>;
   loadSetting<T>(key: string): Promise<T | undefined>;
   saveSetting(key: string, value: unknown): Promise<void>;
+  loadMemories(limit: number): Promise<MemoryItem[]>;
+  saveMemory(m: MemoryItem): Promise<void>;
+  deleteMemory(id: string): Promise<void>;
   /** Spending since `since` (ms), all tasks. */
   spentSince(since: number): Promise<number>;
   stats(days: number, timeZone: string): Promise<{ days: DayStats[]; agents: AgentStats[] }>;
@@ -151,6 +155,21 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE tasks ADD COLUMN follow_up_of uuid;
   `,
+  `
+  -- shared memory when no Mem0 server is configured (keyword search)
+  CREATE TABLE memories (
+    id          uuid PRIMARY KEY,
+    text        text NOT NULL,
+    scope       text NOT NULL,
+    agent_id    text,
+    run_id      text,
+    created_by  text,
+    task_id     uuid,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now()
+  );
+  CREATE INDEX memories_scope_idx ON memories (scope, agent_id, run_id);
+  `,
 ];
 
 const ms = (d: Date | null | undefined) => (d ? d.getTime() : undefined);
@@ -205,6 +224,18 @@ const toApproval = (r: Row): Approval => ({
   status: r.status,
   createdAt: ms(r.created_at)!,
   decidedBy: r.decided_by ?? undefined,
+});
+
+const toMemory = (r: Row): MemoryItem => ({
+  id: r.id,
+  text: r.text,
+  scope: r.scope,
+  agentId: r.agent_id ?? undefined,
+  runId: r.run_id ?? undefined,
+  createdBy: r.created_by ?? undefined,
+  taskId: r.task_id ?? undefined,
+  createdAt: ms(r.created_at),
+  updatedAt: ms(r.updated_at),
 });
 
 const toUser = (r: Row): StoredUser => ({
@@ -354,6 +385,24 @@ export class PgPersistence implements Persistence, AuthRepo {
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
       [key, JSON.stringify(value)],
     );
+  }
+
+  async loadMemories(limit: number) {
+    const { rows } = await this.pool.query(`SELECT * FROM memories ORDER BY updated_at DESC LIMIT $1`, [limit]);
+    return rows.map(toMemory);
+  }
+
+  async saveMemory(m: MemoryItem) {
+    await this.pool.query(
+      `INSERT INTO memories (id, text, scope, agent_id, run_id, created_by, task_id, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (id) DO UPDATE SET text = EXCLUDED.text, updated_at = EXCLUDED.updated_at`,
+      [m.id, m.text, m.scope, m.agentId ?? null, m.runId ?? null, m.createdBy ?? null, m.taskId ?? null, date(m.createdAt), date(m.updatedAt)],
+    );
+  }
+
+  async deleteMemory(id: string) {
+    await this.pool.query(`DELETE FROM memories WHERE id = $1`, [id]);
   }
 
   async spentSince(since: number) {

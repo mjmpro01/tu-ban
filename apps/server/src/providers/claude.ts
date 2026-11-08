@@ -1,8 +1,9 @@
 import { type CanUseTool, type SDKMessage, createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { toolActivity } from "@tu-ban/shared";
-import { TOOL_GROUPS } from "@tu-ban/shared";
-import { type AgentProvider, type RunContext, type RunResult, type TeamApi, clip, summarizeToolInput } from "./types.ts";
+import { MEMORY_SCOPES, TOOL_GROUPS } from "@tu-ban/shared";
+import { NINEROUTER_KEY, NINEROUTER_URL } from "../config.ts";
+import { type AgentProvider, type MemoryApi, type RunContext, type RunResult, type TeamApi, clip, summarizeToolInput } from "./types.ts";
 
 /** Harmless internal tools that are not part of the configurable groups. */
 const ALWAYS_ALLOWED = new Set(["TodoWrite", "Skill"]);
@@ -11,6 +12,9 @@ const TEAM_SERVER = "team";
 const TEAM_PREFIX = `mcp__${TEAM_SERVER}__`;
 /** How much of each sub-task result goes back to the Manager in one tool result. */
 const RESULT_CHARS = 8000;
+
+const MEMORY_SERVER = "memory";
+const MEMORY_PREFIX = `mcp__${MEMORY_SERVER}__`;
 
 const text = (t: string, isError = false) => ({ content: [{ type: "text" as const, text: t }], isError });
 
@@ -77,6 +81,59 @@ ${clip(r.feedback, RESULT_CHARS)}`);
   });
 }
 
+/** In-process MCP server with the shared memory (every Claude agent gets it). */
+function memoryServer(memory: MemoryApi) {
+  const scopes = MEMORY_SCOPES as [string, ...string[]];
+  return createSdkMcpServer({
+    name: MEMORY_SERVER,
+    alwaysLoad: true,
+    tools: [
+      tool(
+        "memory_search",
+        `Search the office's shared memory: facts, decisions and preferences saved by people and agents in earlier work.
+Search before starting work that may depend on earlier context. scope: office (everyone's), agent (your own notes), request (notes for the current user request), all (default).`,
+        {
+          query: z.string().min(2).describe("What to look for, in the user's language"),
+          scope: z.enum(["all", ...scopes]).optional(),
+          limit: z.number().int().min(1).max(20).optional(),
+        },
+        async (a) => {
+          try {
+            const items = await memory.search(a.query, a.scope as never, a.limit);
+            if (!items.length) return text("No matching memories.");
+            return text(items.map((m) => `- (${m.scope}${m.score !== undefined ? `, ${m.score.toFixed(2)}` : ""}) ${m.text}`).join("\n"));
+          } catch (e) {
+            return text(`Memory unavailable: ${(e as Error).message}`, true);
+          }
+        },
+      ),
+      tool(
+        "memory_save",
+        `Save one durable fact to the shared memory so other agents (and you, later) can use it: a decision, a user preference, project facts, where something lives.
+Keep it short and self-contained. Do not save secrets or passing details. scope: office (default, shared with everyone), agent (only you), request (teammates on this request).`,
+        { text: z.string().min(5).max(2000), scope: z.enum(scopes).optional() },
+        async (a) => {
+          try {
+            const saved = await memory.save(a.text, (a.scope ?? "office") as never);
+            return text(saved.length ? `Saved (${saved.map((m) => m.id).join(", ")}).` : "Nothing new to save (already known).");
+          } catch (e) {
+            return text(`Could not save: ${(e as Error).message}`, true);
+          }
+        },
+      ),
+    ],
+  });
+}
+
+/**
+ * Environment for the Claude Code subprocess when requests go through 9router. An Anthropic API key
+ * is not passed on, so it is never sent to the gateway.
+ */
+export function nineRouterEnv(): Record<string, string | undefined> {
+  const { ANTHROPIC_API_KEY: _key, ...rest } = process.env;
+  return { ...rest, ANTHROPIC_BASE_URL: NINEROUTER_URL, ANTHROPIC_AUTH_TOKEN: NINEROUTER_KEY || "9router" };
+}
+
 type Block = {
   type: string;
   text?: string;
@@ -113,7 +170,7 @@ export const claudeProvider: AgentProvider = {
     // Tool permissions from the agent settings: "off" groups are removed, "auto" runs, "ask" waits for a human.
     const disallowedTools = TOOL_GROUPS.filter((g) => ctx.config.tools[g.id] === "off").flatMap((g) => [...g.tools]);
     const canUseTool: CanUseTool = async (toolName, input) => {
-      if (ALWAYS_ALLOWED.has(toolName) || toolName.startsWith(TEAM_PREFIX)) return { behavior: "allow", updatedInput: input };
+      if (ALWAYS_ALLOWED.has(toolName) || toolName.startsWith(TEAM_PREFIX) || toolName.startsWith(MEMORY_PREFIX)) return { behavior: "allow", updatedInput: input };
       const mode = ctx.toolMode(toolName);
       if (mode === "auto") return { behavior: "allow", updatedInput: input };
       if (mode === "off") return { behavior: "deny", message: `You are not allowed to use ${toolName}. Work without it or explain what you need.` };
@@ -123,12 +180,18 @@ export const claudeProvider: AgentProvider = {
         : { behavior: "deny", message: "The human operator denied this action. Try another approach or explain what you need." };
     };
 
+    const mcpServers = {
+      ...(ctx.team ? { [TEAM_SERVER]: teamServer(ctx.team) } : {}),
+      ...(ctx.memory ? { [MEMORY_SERVER]: memoryServer(ctx.memory) } : {}),
+    };
+    const append = [ctx.config.systemPrompt, ctx.memoryContext].filter(Boolean).join("\n\n");
+
     const stream = query({
       prompt: ctx.task.prompt,
       options: {
         model: ctx.config.model,
         cwd: ctx.workdir,
-        systemPrompt: { type: "preset", preset: "claude_code", append: ctx.config.systemPrompt },
+        systemPrompt: { type: "preset", preset: "claude_code", append },
         // Only the work folder's own .claude/ is read (that is where the skill library lives);
         // ~/.claude on the host machine is never loaded.
         settingSources: ["project"],
@@ -139,7 +202,10 @@ export const claudeProvider: AgentProvider = {
         maxTurns: ctx.limits.maxTurns,
         maxBudgetUsd: ctx.limits.maxBudgetUsd,
         abortController,
-        ...(ctx.team ? { mcpServers: { [TEAM_SERVER]: teamServer(ctx.team) } } : {}),
+        ...(Object.keys(mcpServers).length ? { mcpServers } : {}),
+        // 9router: the Claude Code subprocess talks to the gateway instead of api.anthropic.com.
+        // `env` replaces the subprocess environment, so the rest of it is passed on.
+        ...(NINEROUTER_URL ? { env: nineRouterEnv() } : {}),
       },
     });
 

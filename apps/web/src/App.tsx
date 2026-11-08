@@ -4,6 +4,7 @@ import { createGame } from "./game/OfficeScene";
 import { AgentSettingsDialog } from "./AgentSettings";
 import { LoginScreen, PasswordDialog, UserMenu, UsersDialog } from "./Auth";
 import { HistoryDialog } from "./History";
+import { MemoryDialog } from "./Memory";
 import { NotificationsDialog } from "./Notifications";
 import { OverviewBoard } from "./Overview";
 import { StatsDialog } from "./Stats";
@@ -38,6 +39,7 @@ function Office() {
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [notifyOpen, setNotifyOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
   const [view, setView] = useState<"office" | "overview">(() => {
     try {
       return localStorage.getItem("tuban:view") === "overview" ? "overview" : "office";
@@ -80,6 +82,7 @@ function Office() {
           onOpenPassword={() => setPasswordOpen(true)}
           onOpenStats={() => setStatsOpen(true)}
           onOpenNotifications={() => setNotifyOpen(true)}
+          onOpenMemory={() => setMemoryOpen(true)}
         />
         <Composer />
         <Approvals />
@@ -92,6 +95,7 @@ function Office() {
       <PasswordDialog open={passwordOpen} onClose={() => setPasswordOpen(false)} />
       <StatsDialog open={statsOpen} onClose={() => setStatsOpen(false)} />
       <NotificationsDialog open={notifyOpen} onClose={() => setNotifyOpen(false)} />
+      <MemoryDialog open={memoryOpen} onClose={() => setMemoryOpen(false)} />
     </div>
   );
 }
@@ -120,6 +124,7 @@ function Header(props: {
   onOpenPassword: () => void;
   onOpenStats: () => void;
   onOpenNotifications: () => void;
+  onOpenMemory: () => void;
 }) {
   const { onOpenHistory, onOpenSettings } = props;
   const isAdmin = useStore((s) => s.auth?.user?.role === "admin");
@@ -145,6 +150,9 @@ function Header(props: {
         </button>
         <button type="button" className="secondary small" onClick={props.onOpenStats}>
           Thống kê
+        </button>
+        <button type="button" className="secondary small" onClick={props.onOpenMemory}>
+          Bộ nhớ
         </button>
         {isAdmin && (
           <button type="button" className="secondary small" onClick={onOpenSettings}>

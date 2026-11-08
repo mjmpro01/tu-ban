@@ -120,7 +120,7 @@ Task đang chạy dở khi server tắt không thể chạy tiếp: lần khởi
 
 ### Chế độ Demo
 
-Khi **không có `ANTHROPIC_API_KEY`**, app chạy ở chế độ **Demo**: các agent làm theo kịch bản có sẵn, không tốn tiền. Dùng chế độ này để xem giao diện và hành vi của nhân vật.
+Khi **không có `ANTHROPIC_API_KEY` hay `NINEROUTER_URL`**, app chạy ở chế độ **Demo**: các agent làm theo kịch bản có sẵn, không tốn tiền. Dùng chế độ này để xem giao diện và hành vi của nhân vật.
 
 ### Chạy với Claude thật (chế độ Live)
 
@@ -136,6 +136,58 @@ Các agent Claude (Manager, Researcher, Writer) chạy bằng **Claude Agent SDK
 
 - Mặc định, công cụ đọc file và tìm web chạy luôn; ghi file và chạy lệnh phải được **bạn duyệt** trên dashboard. Đổi cho từng agent trong **Quản lý agent → Quyền dùng công cụ**.
 - Mỗi task bị giới hạn bởi `MAX_BUDGET_USD` (mặc định $1) và `MAX_TURNS` (mặc định 30).
+
+### Bộ nhớ chung (context memory)
+
+Mọi agent dùng chung một **bộ nhớ**, bất kể chạy bằng Claude, Cursor hay model nào sau 9router. Có ba phạm vi:
+
+| Phạm vi | Ai thấy | Ví dụ |
+|---|---|---|
+| **Chung** | Mọi agent | "Khách hàng muốn báo cáo bằng tiếng Việt, tối đa 2 trang" |
+| **Riêng agent** | Chỉ agent đó | "Writer: dùng giọng văn thân thiện" |
+| **Theo yêu cầu** | Các agent cùng làm một yêu cầu | Researcher để lại nguồn tài liệu cho Writer |
+
+Bộ nhớ được dùng theo các cách sau:
+- **Tự nhắc lại:** trước mỗi task, server tìm những ghi nhớ liên quan nhất và đưa vào hướng dẫn cho agent (agent Cursor nhận chúng trong prompt).
+- **Tự ghi nhớ:** khi một yêu cầu xong, kết quả được lưu vào bộ nhớ chung. Với Mem0 có model, Mem0 tự rút ra các ý chính và gộp với điều đã biết.
+- **Công cụ cho agent Claude:** `memory_search` và `memory_save` (luôn được phép, không cần duyệt).
+- **Dashboard → Bộ nhớ:** mọi người tìm và xem; admin thêm, sửa, xoá và bật/tắt tự nhắc, tự ghi nhớ.
+
+Có hai cách lưu:
+
+1. **Mặc định (không cần cài thêm):** lưu trong Postgres, tìm theo từ khoá. Tìm không phân biệt dấu: "bao cao" vẫn ra "báo cáo".
+2. **[Mem0](https://github.com/mem0ai/mem0) (Apache-2.0):** tìm theo nghĩa bằng vector (pgvector) và tự gộp ghi nhớ trùng nhau. Embedding dùng model tiếng Việt [AITeamVN/Vietnamese_Embedding](https://huggingface.co/AITeamVN/Vietnamese_Embedding) (BGE-M3 fine-tune, 1024 chiều). Model chạy bằng Hugging Face text-embeddings-inference, còn việc rút ý chính đi qua 9router.
+
+Cách chạy Mem0:
+
+```bash
+export MEM0_API_KEY=$(openssl rand -hex 24)
+```
+
+```bash
+docker compose --profile memory up -d
+```
+
+```bash
+MEM0_URL=http://localhost:8888 MEMORY_EMBED_URL=http://tei \
+MEM0_NINEROUTER_URL=http://host.docker.internal:20128 MEMORY_LLM_MODEL=<model-id-trong-9router> \
+DATABASE_URL=postgres://tuban:tuban@localhost:5432/tuban npm run dev
+```
+
+Lưu ý khi dùng Mem0:
+- Lúc khởi động, server gửi cấu hình model cho Mem0 (`POST /configure`). Mem0 lưu vector trong bảng `tuban_memories_<số chiều>` của database `mem0`.
+- `MEMORY_EMBED_URL` và `MEM0_NINEROUTER_URL` là địa chỉ **Mem0** gọi tới, tính từ bên trong Docker, nên khác địa chỉ server văn phòng dùng.
+- Không có `MEMORY_EMBED_URL` thì embedding đi qua `/v1/embeddings` của 9router: đặt `MEMORY_EMBED_MODEL` và `MEMORY_EMBED_DIMS` theo model đó.
+- Volume Postgres đã tạo từ trước khi có Mem0 thì cần tạo database cho Mem0 một lần: `docker compose exec postgres bash /docker-entrypoint-initdb.d/init-db.sh`.
+- Mem0 lỗi hoặc tắt không làm hỏng việc của agent: task vẫn chạy, chỉ thiếu phần nhớ lại. Lỗi hiện ở màn hình Bộ nhớ.
+- Ghi nhớ nằm trong `memories` (mặc định) hoặc trong Mem0. Đổi cách lưu không tự chuyển dữ liệu cũ.
+
+### Dùng 9router
+
+[9router](https://github.com/decolua/9router) là gateway chạy ở máy bạn (mặc định `http://localhost:20128`), gom nhiều tài khoản AI về một chỗ. Đặt `NINEROUTER_URL` (và `NINEROUTER_KEY` nếu bạn bật API key trong 9router) thì:
+- Agent Claude gửi request qua 9router (`ANTHROPIC_BASE_URL`), nên không cần `ANTHROPIC_API_KEY`. Nếu vẫn có `ANTHROPIC_API_KEY` thì khoá này không được gửi cho gateway.
+- Văn phòng chạy ở chế độ Live.
+- Model của từng agent (Quản lý agent → Model) phải là model mà 9router nhận. Chi phí mà SDK báo là ước tính theo giá Anthropic, có thể khác chi phí thật qua 9router.
 
 ### Chạy production (một tiến trình)
 
@@ -154,7 +206,7 @@ Server phục vụ luôn bản web đã build ở http://localhost:8787.
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
 | `DATABASE_URL` |  | Chuỗi kết nối Postgres. Để trống thì chỉ lưu trong bộ nhớ |
-| `TU_BAN_MODE` | `live` nếu có `ANTHROPIC_API_KEY`, ngược lại `demo` | Ép chạy `demo` hoặc `live` |
+| `TU_BAN_MODE` | `live` nếu có `ANTHROPIC_API_KEY` hoặc `NINEROUTER_URL`, ngược lại `demo` | Ép chạy `demo` hoặc `live` |
 | `ANTHROPIC_API_KEY` |  | Khoá API cho các agent Claude |
 | `CLAUDE_MODEL` | `claude-opus-5-5` | Model mặc định cho các agent Claude (đổi riêng từng agent trong **Quản lý agent**) |
 | `MAX_BUDGET_USD` | `1` | Trần chi phí mỗi task |
@@ -170,6 +222,13 @@ Server phục vụ luôn bản web đã build ở http://localhost:8787.
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` |  | Gửi thông báo qua Telegram |
 | `SLACK_WEBHOOK_URL` |  | Gửi thông báo qua Slack |
 | `TZ` | múi giờ máy | Múi giờ dùng để tính "ngày" cho thống kê và ngân sách, vd. `Asia/Ho_Chi_Minh` |
+| `NINEROUTER_URL` / `NINEROUTER_KEY` |  | Gọi agent Claude qua 9router (xem **Dùng 9router**) |
+| `MEM0_URL` / `MEM0_API_KEY` |  | Dùng Mem0 cho bộ nhớ chung. Để trống thì tìm theo từ khoá trong Postgres |
+| `MEM0_NINEROUTER_URL` | `NINEROUTER_URL` | Địa chỉ 9router tính từ Mem0 (Mem0 chạy trong Docker: `http://host.docker.internal:20128`) |
+| `MEMORY_LLM_MODEL` |  | Model trong 9router mà Mem0 dùng để rút ý chính |
+| `MEMORY_EMBED_URL` |  | Server embedding (text-embeddings-inference) tính từ Mem0, vd. `http://tei` |
+| `MEMORY_EMBED_MODEL` / `MEMORY_EMBED_DIMS` | `AITeamVN/Vietnamese_Embedding` / `1024` | Model embedding và số chiều vector |
+| `MEM0_CONFIGURE` | `1` | `0` = không gửi cấu hình model cho Mem0 lúc khởi động |
 
 ## Các agent
 
@@ -253,16 +312,18 @@ Manager chạy việc độc lập song song, chuyển kết quả bước trư�
 ## Cấu trúc
 
 ```
-apps/server/        Fastify + Socket.IO, orchestrator, các provider (claude, cursor, copilot, mock), Postgres (db.ts)
+apps/server/        Fastify + Socket.IO, orchestrator, các provider (claude, cursor, copilot, mock), Postgres (db.ts), bộ nhớ chung (memory.ts)
 apps/web/           React dashboard + Phaser 3 (văn phòng 2D)
 packages/shared/    Kiểu dữ liệu dùng chung (AgentEvent, Task, Approval…)
 assets/             Pixel art: ảnh gốc, bản đã xử lý cho game, ảnh xem trước (xem assets/README.md)
 tools/              Script Python xử lý asset
+deploy/             Script khởi tạo Postgres (database cho Mem0)
 ```
 
 Mọi provider đều phát ra cùng một kiểu `AgentEvent`. Mỗi event mang một `activity` (`thinking`, `search`, `code`, `write`, `approval`…), và game dựa vào đó để chọn chỗ nhân vật đi tới, tư thế, icon và bong bóng thoại. Muốn thêm provider mới thì viết một file trong `apps/server/src/providers/` theo interface `AgentProvider`.
 
 ## Lưu ý
 
+- Bộ nhớ chung cũng có API: `GET /api/memory?q=&scope=office|agent|request&agentId=&runId=` (mọi người), `POST /api/memory`, `PUT` / `DELETE /api/memory/<id>` (admin).
 - Dashboard hiển thị 100 task và 200 event gần nhất. Lịch sử cũ hơn lấy qua API: `GET /api/tasks?limit=50&before=<ms>&agentId=<id>` và `GET /api/tasks/<id>/events`.
 - Khi mở dashboard ra Internet, đặt server sau HTTPS (reverse proxy) và đặt `PUBLIC_URL` là địa chỉ https.
