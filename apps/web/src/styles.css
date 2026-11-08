@@ -509,3 +509,12 @@ button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2p
 .schedule-meta { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; }
 .source-badge { font-size: 11px; flex: none; }
 .header-nav { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+
+/* document library */
+.dropzone { border: 1px dashed var(--border); border-radius: 8px; padding: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.dropzone.over { border-color: var(--accent); background: var(--panel); }
+.upload-results { list-style: none; margin: 0; padding: 0; width: 100%; font-size: 12px; display: flex; flex-direction: column; gap: 2px; }
+.button-link { display: inline-flex; align-items: center; text-decoration: none; border-radius: 6px; border: 1px solid var(--border); color: var(--text); }
+.doc-name { overflow-wrap: anywhere; }
+.library-snippet { max-height: 9.5em; overflow: hidden; }
+.doc-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12.5px; line-height: 1.55; max-height: 60vh; overflow-y: auto; background: #1a110c; border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin: 0; }

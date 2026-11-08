@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentInfo, MemoryItem, MemoryScope, Task, ToolMode, Usage } from "@tu-ban/shared";
+import type { AgentEvent, AgentInfo, LibraryDoc, LibraryHit, MemoryItem, MemoryScope, Task, ToolMode, Usage } from "@tu-ban/shared";
 import type { AgentConfig } from "../agents.ts";
 
 export type EmitInput = Omit<AgentEvent, "id" | "ts" | "agentId" | "taskId">;
@@ -39,6 +39,12 @@ export interface MemoryApi {
   save(text: string, scope: MemoryScope): Promise<MemoryItem[]>;
 }
 
+/** The office's reference documents. */
+export interface LibraryApi {
+  search(query: string, limit?: number): LibraryHit[];
+  list(): LibraryDoc[];
+}
+
 export interface RunContext {
   task: Task;
   agent: AgentInfo;
@@ -57,7 +63,9 @@ export interface RunContext {
   skills: string[];
   /** Shared memory tools. */
   memory?: MemoryApi;
-  /** Memories recalled for this task, to add to the agent's instructions. */
+  /** Reference documents. */
+  library?: LibraryApi;
+  /** Memories and document passages recalled for this task, to add to the agent's instructions. */
   memoryContext?: string;
   /** Ask the human to approve a risky action. Resolves true when approved. */
   requestApproval(tool: string, summary: string, input: unknown): Promise<boolean>;

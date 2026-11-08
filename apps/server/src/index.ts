@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import fastifyCookie from "@fastify/cookie";
 import fastifyStatic from "@fastify/static";
@@ -22,6 +23,8 @@ import { Server } from "socket.io";
 import { AuthError, AuthService, MemoryAuthRepo, SESSION_COOKIE, SESSION_TTL_MS } from "./auth.ts";
 import { ADMIN_PASSWORD, ADMIN_USERNAME, COOKIE_SECURE, DATABASE_URL, MODE, PORT, ROOT, WORKDIR } from "./config.ts";
 import { Budget, TIME_ZONE } from "./budget.ts";
+import { LIBRARY_TYPES } from "./extract.ts";
+import { Library, MAX_FILE_BYTES, insideLibrary } from "./library.ts";
 import { Memory } from "./memory.ts";
 import { Notifier } from "./notifier.ts";
 import { Scheduler } from "./schedules.ts";
@@ -51,7 +54,9 @@ const store = new Store(db);
 const budget = new Budget(store);
 await budget.init();
 const memory = new Memory(store, () => [...store.agents.keys()]);
-const orchestrator = new Orchestrator(store, budget, memory);
+const library = new Library(store);
+await library.init();
+const orchestrator = new Orchestrator(store, budget, memory, library);
 await orchestrator.init();
 await memory.init();
 const notifier = new Notifier(store, budget);
@@ -88,6 +93,7 @@ function adminOnly(method: string, path: string) {
     path.startsWith("/api/settings") ||
     (method !== "GET" && path.startsWith("/api/memory")) ||
     (method !== "GET" && path.startsWith("/api/schedules")) ||
+    (method !== "GET" && path.startsWith("/api/library")) ||
     (method === "POST" && path.startsWith("/api/approvals/"))
   );
 }
@@ -274,6 +280,34 @@ app.delete<{ Params: { id: string } }>("/api/schedules/:id", async (req) => {
   return { ok: true };
 });
 app.post<{ Params: { id: string } }>("/api/schedules/:id/run", async (req) => scheduler.runNow(req.params.id));
+
+// document library: everyone reads and searches, admins add and remove
+app.addContentTypeParser("application/octet-stream", { parseAs: "buffer", bodyLimit: MAX_FILE_BYTES + 1024 }, (_req, body, done) => done(null, body));
+app.get("/api/library", async () => ({ docs: library.list(), settings: library.settings, types: LIBRARY_TYPES }));
+app.get<{ Querystring: { q?: string; limit?: string } }>("/api/library/search", async (req) =>
+  library.search((req.query.q ?? "").slice(0, 500), Number(req.query.limit ?? 10) || 10),
+);
+app.get<{ Params: { id: string } }>("/api/library/:id/text", async (req) => ({ text: await library.text(req.params.id) }));
+app.get<{ Params: { id: string } }>("/api/library/:id/file", async (req, reply) => {
+  const doc = library.get(req.params.id);
+  if (!doc || !insideLibrary(doc.file)) return reply.code(404).send({ error: "Không có tài liệu này" });
+  const data = await readFile(resolve(WORKDIR, doc.file));
+  // always a download, never rendered in the dashboard's origin
+  return reply
+    .header("content-type", "application/octet-stream")
+    .header("content-disposition", `attachment; filename*=UTF-8''${encodeURIComponent(doc.name)}`)
+    .header("x-content-type-options", "nosniff")
+    .send(data);
+});
+app.post<{ Querystring: { name?: string }; Body: Buffer }>("/api/library", { bodyLimit: MAX_FILE_BYTES + 1024 }, async (req) => {
+  if (!Buffer.isBuffer(req.body)) throw new Error("Gửi file dưới dạng application/octet-stream");
+  return library.add(req.query.name ?? "", req.body, req.user!.displayName);
+});
+app.delete<{ Params: { id: string } }>("/api/library/:id", async (req) => {
+  await library.remove(req.params.id);
+  return { ok: true };
+});
+app.put("/api/settings/library", async (req) => library.updateSettings(req.body ?? {}));
 
 // task history
 app.get<{ Querystring: Record<string, string | undefined> }>("/api/tasks", async (req) => {

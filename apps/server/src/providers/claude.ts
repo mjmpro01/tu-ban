@@ -3,7 +3,7 @@ import { z } from "zod";
 import { toolActivity } from "@tu-ban/shared";
 import { MEMORY_SCOPES, TOOL_GROUPS } from "@tu-ban/shared";
 import { NINEROUTER_KEY, NINEROUTER_URL } from "../config.ts";
-import { type AgentProvider, type MemoryApi, type RunContext, type RunResult, type TeamApi, clip, summarizeToolInput } from "./types.ts";
+import { type AgentProvider, type LibraryApi, type MemoryApi, type RunContext, type RunResult, type TeamApi, clip, summarizeToolInput } from "./types.ts";
 
 /** Harmless internal tools that are not part of the configurable groups. */
 const ALWAYS_ALLOWED = new Set(["TodoWrite", "Skill"]);
@@ -15,6 +15,8 @@ const RESULT_CHARS = 8000;
 
 const MEMORY_SERVER = "memory";
 const MEMORY_PREFIX = `mcp__${MEMORY_SERVER}__`;
+const LIBRARY_SERVER = "library";
+const LIBRARY_PREFIX = `mcp__${LIBRARY_SERVER}__`;
 
 const text = (t: string, isError = false) => ({ content: [{ type: "text" as const, text: t }], isError });
 
@@ -134,6 +136,31 @@ export function nineRouterEnv(): Record<string, string | undefined> {
   return { ...rest, ANTHROPIC_BASE_URL: NINEROUTER_URL, ANTHROPIC_AUTH_TOKEN: NINEROUTER_KEY || "9router" };
 }
 
+/** In-process MCP server over the office's document library. */
+function libraryServer(library: LibraryApi) {
+  return createSdkMcpServer({
+    name: LIBRARY_SERVER,
+    alwaysLoad: true,
+    tools: [
+      tool(
+        "library_search",
+        `Search the office's reference documents (policies, contracts, specs, notes uploaded by people) by keywords.
+Returns passages with the file name and path; cite the file name when you use a passage, and open the file with Read for more.`,
+        { query: z.string().min(2).describe("Keywords, in the documents' language"), limit: z.number().int().min(1).max(10).optional() },
+        async (a) => {
+          const hits = library.search(a.query, a.limit ?? 5);
+          if (!hits.length) return text("No matching passages.");
+          return text(hits.map((h) => `### ${h.name} — passage ${h.chunk + 1} (file: ${h.file})\n${h.text}`).join("\n\n"));
+        },
+      ),
+      tool("library_list", "List the documents in the office library.", {}, async () => {
+        const docs = library.list();
+        return text(docs.length ? docs.map((d) => `- ${d.name} (file: ${d.file}${d.warning ? `; ${d.warning}` : ""})`).join("\n") : "The library is empty.");
+      }),
+    ],
+  });
+}
+
 type Block = {
   type: string;
   text?: string;
@@ -170,7 +197,7 @@ export const claudeProvider: AgentProvider = {
     // Tool permissions from the agent settings: "off" groups are removed, "auto" runs, "ask" waits for a human.
     const disallowedTools = TOOL_GROUPS.filter((g) => ctx.config.tools[g.id] === "off").flatMap((g) => [...g.tools]);
     const canUseTool: CanUseTool = async (toolName, input) => {
-      if (ALWAYS_ALLOWED.has(toolName) || toolName.startsWith(TEAM_PREFIX) || toolName.startsWith(MEMORY_PREFIX)) return { behavior: "allow", updatedInput: input };
+      if (ALWAYS_ALLOWED.has(toolName) || toolName.startsWith(TEAM_PREFIX) || toolName.startsWith(MEMORY_PREFIX) || toolName.startsWith(LIBRARY_PREFIX)) return { behavior: "allow", updatedInput: input };
       const mode = ctx.toolMode(toolName);
       if (mode === "auto") return { behavior: "allow", updatedInput: input };
       if (mode === "off") return { behavior: "deny", message: `You are not allowed to use ${toolName}. Work without it or explain what you need.` };
@@ -183,6 +210,7 @@ export const claudeProvider: AgentProvider = {
     const mcpServers = {
       ...(ctx.team ? { [TEAM_SERVER]: teamServer(ctx.team) } : {}),
       ...(ctx.memory ? { [MEMORY_SERVER]: memoryServer(ctx.memory) } : {}),
+      ...(ctx.library ? { [LIBRARY_SERVER]: libraryServer(ctx.library) } : {}),
     };
     const append = [ctx.config.systemPrompt, ctx.memoryContext].filter(Boolean).join("\n\n");
 

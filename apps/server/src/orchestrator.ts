@@ -27,6 +27,7 @@ import {
   validateSettings,
 } from "./agents.ts";
 import type { Budget } from "./budget.ts";
+import { type Library, librarySection } from "./library.ts";
 import { type Memory, recallSection } from "./memory.ts";
 import { MODE, WORKDIR } from "./config.ts";
 import { claudeProvider } from "./providers/claude.ts";
@@ -86,6 +87,7 @@ export class Orchestrator {
     private store: Store,
     private budget: Budget,
     private memory?: Memory,
+    private library?: Library,
   ) {}
 
   async init() {
@@ -551,15 +553,54 @@ export class Orchestrator {
     };
   }
 
-  /** Find what the office already knows about this task and hand it to the agent. */
+  private libraryApi(library: Library, emit: (e: EmitInput) => void) {
+    return {
+      search: (query: string, limit?: number) => {
+        const hits = library.search(query, limit ?? 5);
+        emit({
+          type: "memory",
+          activity: "search",
+          tool: "library_search",
+          summary: `Tra tài liệu: "${clip(query, 50)}" → ${hits.length} đoạn`,
+          detail: hits.map((h) => `- ${h.name} (đoạn ${h.chunk + 1})`).join("\n") || undefined,
+        });
+        return hits;
+      },
+      list: () => library.list(),
+    };
+  }
+
+  /** What the office knows about this task (memories, document passages), to hand to the agent. */
   private async autoRecall(task: Task, agentId: string, runId: string, emit: (e: EmitInput) => void) {
-    if (!this.memory?.settings.autoRecall || task.kind === "review") return undefined;
+    if (task.kind === "review") return undefined;
+    const parts = [await this.recallMemories(task, agentId, runId, emit), this.recallDocuments(task, emit)].filter(Boolean);
+    return parts.length ? parts.join("\n\n") : undefined;
+  }
+
+  /** Search text for a task: the work itself, not the wrapper added around delegated work. */
+  private recallQuery(task: Task) {
+    return clip(task.prompt.replace(/^\[Việc do Manager giao[^\n]*\n+/, "").split(/\n## Bối cảnh/)[0], 500);
+  }
+
+  private recallDocuments(task: Task, emit: (e: EmitInput) => void) {
+    const lib = this.library;
+    if (!lib?.settings.autoContext) return undefined;
+    // only passages that match well enough: a weak match is noise in the instructions
+    const hits = lib.search(this.recallQuery(task), lib.settings.contextChunks).filter((h) => h.score >= 0.3);
+    if (!hits.length) return undefined;
+    emit({
+      type: "memory",
+      activity: "search",
+      summary: `Đọc ${hits.length} đoạn tài liệu liên quan`,
+      detail: hits.map((h) => `- ${h.name} (đoạn ${h.chunk + 1})`).join("\n"),
+    });
+    return librarySection(hits);
+  }
+
+  private async recallMemories(task: Task, agentId: string, runId: string, emit: (e: EmitInput) => void) {
+    if (!this.memory?.settings.autoRecall) return undefined;
     try {
-      // search with the work itself, not the wrapper text added around delegated work
-      const query = task.prompt
-        .replace(/^\[Việc do Manager giao[^\n]*\n+/, "")
-        .split(/\n## Bối cảnh/)[0];
-      const items = await this.memory.recall(clip(query, 500), { agentId, runId });
+      const items = await this.memory.recall(this.recallQuery(task), { agentId, runId });
       if (!items.length) return undefined;
       emit({
         type: "memory",
@@ -695,10 +736,12 @@ export class Orchestrator {
       const runId = this.rootOf(task).id;
       const memory = this.memory ? this.memoryApi(this.memory, agent.id, runId, taskId, emit) : undefined;
       const memoryContext = await this.autoRecall(task, agent.id, runId, emit);
+      const library = this.library ? this.libraryApi(this.library, emit) : undefined;
       const { result, usage } = await provider.run({
         task,
         agent,
         memory,
+        library,
         memoryContext,
         skills,
         toolMode,

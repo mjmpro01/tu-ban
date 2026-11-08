@@ -383,6 +383,40 @@ export interface ScheduleInput {
   enabled?: boolean;
 }
 
+// ---------------------------------------------------------------- document library
+export interface LibraryDoc {
+  id: string;
+  /** Original file name. */
+  name: string;
+  /** Where the file is, relative to the agents' work folder (they can open it). */
+  file: string;
+  size: number;
+  chars: number;
+  chunks: number;
+  createdBy?: string;
+  createdAt: number;
+  /** Set when no text could be read (scanned PDF, password…): the file is kept, but not searchable. */
+  warning?: string;
+}
+
+export interface LibraryHit {
+  docId: string;
+  name: string;
+  file: string;
+  /** Which part of the document (0-based). */
+  chunk: number;
+  text: string;
+  score: number;
+}
+
+export interface LibrarySettings {
+  /** Put the best matching passages into every task's instructions. */
+  autoContext: boolean;
+  contextChunks: number;
+}
+
+export const DEFAULT_LIBRARY_SETTINGS: LibrarySettings = { autoContext: true, contextChunks: 3 };
+
 export interface Snapshot {
   mode: "demo" | "live";
   agents: AgentInfo[];

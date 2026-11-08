@@ -4,6 +4,7 @@ import { createGame } from "./game/OfficeScene";
 import { AgentSettingsDialog } from "./AgentSettings";
 import { LoginScreen, PasswordDialog, UserMenu, UsersDialog } from "./Auth";
 import { HistoryDialog } from "./History";
+import { LibraryDialog } from "./Library";
 import { MemoryDialog } from "./Memory";
 import { SchedulesDialog } from "./Schedules";
 import { NotificationsDialog } from "./Notifications";
@@ -42,6 +43,7 @@ function Office() {
   const [notifyOpen, setNotifyOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [schedulesOpen, setSchedulesOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [view, setView] = useState<"office" | "overview">(() => {
     try {
       return localStorage.getItem("tuban:view") === "overview" ? "overview" : "office";
@@ -86,6 +88,7 @@ function Office() {
           onOpenNotifications={() => setNotifyOpen(true)}
           onOpenMemory={() => setMemoryOpen(true)}
           onOpenSchedules={() => setSchedulesOpen(true)}
+          onOpenLibrary={() => setLibraryOpen(true)}
         />
         <Composer />
         <Approvals />
@@ -100,6 +103,7 @@ function Office() {
       <NotificationsDialog open={notifyOpen} onClose={() => setNotifyOpen(false)} />
       <MemoryDialog open={memoryOpen} onClose={() => setMemoryOpen(false)} />
       <SchedulesDialog open={schedulesOpen} onClose={() => setSchedulesOpen(false)} />
+      <LibraryDialog open={libraryOpen} onClose={() => setLibraryOpen(false)} />
     </div>
   );
 }
@@ -130,6 +134,7 @@ function Header(props: {
   onOpenNotifications: () => void;
   onOpenMemory: () => void;
   onOpenSchedules: () => void;
+  onOpenLibrary: () => void;
 }) {
   const { onOpenHistory, onOpenSettings } = props;
   const isAdmin = useStore((s) => s.auth?.user?.role === "admin");
@@ -166,6 +171,9 @@ function Header(props: {
         </button>
         <button type="button" className="secondary small" onClick={props.onOpenMemory}>
           Bộ nhớ
+        </button>
+        <button type="button" className="secondary small" onClick={props.onOpenLibrary}>
+          Tài liệu
         </button>
         {isAdmin && (
           <button type="button" className="secondary small" onClick={onOpenSettings}>
