@@ -430,3 +430,54 @@ button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2p
 .channel .error, .channel .success { margin: 4px 0 0; font-size: 12px; }
 .kind-badge.ok { color: var(--ok); border-color: var(--ok); }
 .env-hint { font-size: 11px; white-space: nowrap; overflow-x: auto; max-width: 100%; }
+
+/* ---------------------------------------------------------------- overview board */
+.view-tabs { margin: 0; }
+.game[hidden] { display: none; }
+.overview { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding-right: 4px; }
+.overview-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.stat-warn .stat-value { color: var(--warn); }
+.overview-h { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0 0 8px; }
+.agent-columns { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.agent-col { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.agent-col-head { display: flex; gap: 8px; align-items: center; }
+.agent-col-head > div { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
+.agent-col-name { color: var(--text); font-weight: 700; font-size: 14px; margin: 0; }
+.agent-col-head .status { margin-left: 0; }
+.agent-col-block h3 { margin: 0 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.agent-col-block p { margin: 0; font-size: 12px; }
+.now-card { display: flex; flex-direction: column; gap: 3px; font-size: 12px; background: var(--panel-2); border-radius: 8px; padding: 8px; border-left: 3px solid var(--ok); overflow-wrap: anywhere; }
+.now-card.waiting { border-left-color: var(--warn); }
+.now-step { color: var(--text); }
+.queue, .recent { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.queue li, .recent li { background: var(--panel-2); border-radius: 8px; padding: 6px 8px; overflow-wrap: anywhere; }
+.queue { counter-reset: q; }
+.queue li::before { counter-increment: q; content: counter(q) ". "; color: var(--muted); }
+.queue-actions { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+.queue-actions select { background: #1a110c; border: 1px solid var(--border); border-radius: 6px; padding: 2px 4px; font-size: 12px; max-width: 100%; }
+.recent-meta { font-size: 11px; }
+.recent .secondary.small { margin-top: 4px; }
+.flows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.flow { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.flow-head { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.flow-head .muted { font-size: 12px; }
+.flow-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: stretch; }
+.flow-step { display: flex; gap: 6px; align-items: center; background: var(--panel-2); border: 1px solid transparent; border-radius: 8px; padding: 4px 8px; font-size: 12px; max-width: 280px; }
+.flow-step + .flow-step::before { content: "→"; color: var(--muted); margin-right: 4px; }
+.flow-step.fs-running, .flow-step.fs-waiting_approval { border-color: var(--accent); }
+.flow-step-text { display: flex; flex-direction: column; min-width: 0; }
+.flow-step-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.flow-waiting { font-size: 12px; }
+.handoff-targets { display: flex; flex-direction: column; gap: 6px; }
+.handoff-target { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; font-size: 13px; }
+.handoff-target.on { border-color: var(--accent); background: var(--panel-2); }
+.handoff-target input { accent-color: var(--accent); }
+.handoff-target > span { display: flex; flex-direction: column; gap: 1px; }
+.handoff-name { display: flex; align-items: center; gap: 6px; }
+@media (max-width: 1400px) { .agent-columns { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 960px) {
+  .overview { overflow: visible; }
+  .agent-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .overview-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) { .agent-columns { grid-template-columns: 1fr; } }

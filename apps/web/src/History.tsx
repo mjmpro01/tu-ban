@@ -312,6 +312,11 @@ function TaskDetail({
               ↑ Thuộc yêu cầu: {parent?.title ?? "xem task cha"}
             </button>
           )}
+          {task.followUpOf && (
+            <button type="button" className="link" onClick={() => onSelect(task.followUpOf!)}>
+              ↩ Tiếp nối từ: {live[task.followUpOf]?.title ?? "xem task trước"}
+            </button>
+          )}
         </div>
       </header>
 

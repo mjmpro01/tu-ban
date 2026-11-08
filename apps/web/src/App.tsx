@@ -5,6 +5,7 @@ import { AgentSettingsDialog } from "./AgentSettings";
 import { LoginScreen, PasswordDialog, UserMenu, UsersDialog } from "./Auth";
 import { HistoryDialog } from "./History";
 import { NotificationsDialog } from "./Notifications";
+import { OverviewBoard } from "./Overview";
 import { StatsDialog } from "./Stats";
 import { actions, auth, store, useStore } from "./store";
 import { PROVIDER_LABEL, Portrait, STATUS_LABEL, TASK_LABEL, TimelineItem, fmtCost, fmtTime, fmtTokens } from "./ui";
@@ -37,11 +38,39 @@ function Office() {
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [notifyOpen, setNotifyOpen] = useState(false);
+  const [view, setView] = useState<"office" | "overview">(() => {
+    try {
+      return localStorage.getItem("tuban:view") === "overview" ? "overview" : "office";
+    } catch {
+      return "office";
+    }
+  });
+  const switchView = (v: "office" | "overview") => {
+    setView(v);
+    try {
+      localStorage.setItem("tuban:view", v);
+    } catch {
+      /* private mode: just don't remember */
+    }
+  };
   return (
     <div className="app">
       <main className="office">
-        <GameView />
-        <p className="hint">Bấm vào một nhân vật để xem riêng hoạt động của agent đó.</p>
+        <div className="tabs view-tabs" role="tablist" aria-label="Chế độ xem">
+          <button type="button" role="tab" aria-selected={view === "office"} onClick={() => switchView("office")}>
+            Văn phòng
+          </button>
+          <button type="button" role="tab" aria-selected={view === "overview"} onClick={() => switchView("overview")}>
+            Bảng tổng quan
+          </button>
+        </div>
+        {/* the game keeps running while the board is shown, so switching back is instant */}
+        <GameView visible={view === "office"} />
+        {view === "office" ? (
+          <p className="hint">Bấm vào một nhân vật để xem riêng hoạt động của agent đó.</p>
+        ) : (
+          <OverviewBoard />
+        )}
       </main>
       <aside className="dashboard">
         <Header
@@ -67,13 +96,21 @@ function Office() {
   );
 }
 
-function GameView() {
+function GameView({ visible }: { visible: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
+  const game = useRef<ReturnType<typeof createGame> | null>(null);
   useEffect(() => {
-    const game = createGame(ref.current!);
-    return () => game.destroy(true);
+    game.current = createGame(ref.current!);
+    return () => {
+      game.current?.destroy(true);
+      game.current = null;
+    };
   }, []);
-  return <div className="game" ref={ref} />;
+  useEffect(() => {
+    // the canvas was measured while hidden: fit it again when it comes back
+    if (visible) requestAnimationFrame(() => game.current?.scale.refresh());
+  }, [visible]);
+  return <div className="game" ref={ref} hidden={!visible} />;
 }
 
 function Header(props: {

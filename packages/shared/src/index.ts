@@ -165,6 +165,8 @@ export interface Task {
   createdBy?: string;
   /** User id of the creator (lets members cancel their own tasks). */
   createdById?: string;
+  /** The finished task this one continues (a hand-off from the overview board). */
+  followUpOf?: string;
   startedAt?: number;
   finishedAt?: number;
   result?: string;
@@ -323,6 +325,15 @@ export function matchesTaskQuery(t: Task, f: TaskQuery): boolean {
   }
   return true;
 }
+
+/** Who usually takes over after an agent's work (the overview board shows the first enabled one as the suggestion). */
+export const NEXT_AGENT_HINTS: Record<string, string[]> = {
+  researcher: ["writer", "manager"],
+  writer: ["researcher", "manager"],
+  cursor: ["researcher", "copilot"],
+  copilot: ["researcher", "cursor"],
+  manager: ["writer", "researcher"],
+};
 
 export interface CreateTaskInput {
   prompt: string;

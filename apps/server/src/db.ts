@@ -148,6 +148,9 @@ const MIGRATIONS: string[] = [
     updated_at  timestamptz NOT NULL DEFAULT now()
   );
   `,
+  `
+  ALTER TABLE tasks ADD COLUMN follow_up_of uuid;
+  `,
 ];
 
 const ms = (d: Date | null | undefined) => (d ? d.getTime() : undefined);
@@ -165,6 +168,7 @@ const toTask = (r: Row): Task => ({
   kind: r.kind ?? "task",
   createdBy: r.created_by ?? undefined,
   createdById: r.created_by_id ?? undefined,
+  followUpOf: r.follow_up_of ?? undefined,
   status: r.status,
   createdAt: ms(r.created_at)!,
   startedAt: ms(r.started_at),
@@ -285,16 +289,17 @@ export class PgPersistence implements Persistence, AuthRepo {
 
   saveTask(t: Task) {
     this.write(
-      `INSERT INTO tasks (id, title, prompt, agent_id, parent_id, status, created_at, started_at, finished_at, result, error, tokens_in, tokens_out, cost_usd, kind, created_by, created_by_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+      `INSERT INTO tasks (id, title, prompt, agent_id, parent_id, status, created_at, started_at, finished_at, result, error, tokens_in, tokens_out, cost_usd, kind, created_by, created_by_id, follow_up_of)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
        ON CONFLICT (id) DO UPDATE SET
+         agent_id = EXCLUDED.agent_id,
          status = EXCLUDED.status, started_at = EXCLUDED.started_at, finished_at = EXCLUDED.finished_at,
          result = EXCLUDED.result, error = EXCLUDED.error,
          tokens_in = EXCLUDED.tokens_in, tokens_out = EXCLUDED.tokens_out, cost_usd = EXCLUDED.cost_usd`,
       [
         t.id, t.title, t.prompt, t.agentId, t.parentId ?? null, t.status, date(t.createdAt), date(t.startedAt), date(t.finishedAt),
         t.result ?? null, t.error ?? null, t.usage.tokensIn, t.usage.tokensOut, t.usage.costUsd, t.kind,
-        t.createdBy ?? null, t.createdById ?? null,
+        t.createdBy ?? null, t.createdById ?? null, t.followUpOf ?? null,
       ],
     );
   }

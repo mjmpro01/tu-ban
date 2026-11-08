@@ -213,6 +213,7 @@ export class Orchestrator {
     kind: TaskKind;
     parentId?: string;
     createdBy?: Actor;
+    followUpOf?: string;
   }): Task {
     const task: Task = {
       id: randomUUID(),
@@ -223,6 +224,7 @@ export class Orchestrator {
       kind: p.kind,
       createdBy: p.createdBy?.name,
       createdById: p.createdBy?.id,
+      followUpOf: p.followUpOf,
       status: "queued",
       createdAt: Date.now(),
       usage: emptyUsage(),
@@ -230,6 +232,77 @@ export class Orchestrator {
     this.store.setTask(task);
     this.queues.get(p.agentId)!.push(task.id);
     this.pump(p.agentId);
+    return task;
+  }
+
+  /**
+   * Move a task that has not started yet to another agent's queue (kept in creation order).
+   * A Manager sub-task cannot go to the Manager: it is busy waiting for that very sub-task.
+   */
+  reassign(taskId: string, agentId: string, actor?: Actor): Task {
+    const task = this.store.tasks.get(taskId);
+    if (!task) throw new Error("Không có task này");
+    if (task.status !== "queued") throw new Error("Chỉ chuyển được task đang chờ trong hàng đợi");
+    const target = this.configs.get(agentId);
+    if (!target) throw new Error(`Không có agent "${agentId}"`);
+    if (!target.enabled) throw new Error(`${target.name} đang tắt`);
+    if (agentId === task.agentId) return task;
+    if (task.parentId && agentId === MANAGER_ID) throw new Error("Không chuyển việc con cho Manager: Manager đang chờ chính việc này");
+    const from = this.queues.get(task.agentId)!;
+    const i = from.indexOf(taskId);
+    if (i >= 0) from.splice(i, 1);
+    const to = this.queues.get(agentId)!;
+    const at = to.findIndex((id) => (this.store.tasks.get(id)?.createdAt ?? 0) > task.createdAt);
+    to.splice(at < 0 ? to.length : at, 0, taskId);
+    const previous = this.store.agents.get(task.agentId)?.name ?? task.agentId;
+    this.store.patchTask(taskId, { agentId });
+    this.store.addEvent({
+      agentId: task.agentId,
+      taskId,
+      type: "handoff",
+      activity: "handoff",
+      targetAgentId: agentId,
+      summary: `${actor ? `${actor.name} chuyển` : "Chuyển"} "${task.title}" từ ${previous} sang ${target.name}`,
+      actor: actor?.name,
+    });
+    this.pump(agentId);
+    return this.store.tasks.get(taskId)!;
+  }
+
+  /** Start a new request for another agent that continues a finished task, with its result as context. */
+  handoff(fromTaskId: string, input: { agentId?: string; instructions?: string }, actor?: Actor): Task {
+    const from = this.store.tasks.get(fromTaskId);
+    if (!from) throw new Error("Không có task này");
+    if (from.status !== "done") throw new Error("Chỉ bàn giao tiếp được task đã xong");
+    const target = input.agentId ? this.configs.get(input.agentId) : undefined;
+    if (!target) throw new Error("Chọn agent nhận việc");
+    if (!target.enabled) throw new Error(`${target.name} đang tắt`);
+    const instructions = String(input.instructions ?? "").trim();
+    if (!instructions) throw new Error("Nhập việc cần làm tiếp");
+    const fromName = this.store.agents.get(from.agentId)?.name ?? from.agentId;
+    const prompt = [
+      instructions,
+      `## Bối cảnh: kết quả trước đó của ${fromName} (task "${from.title}")`,
+      clip(from.result ?? "", 8000),
+      "File tạo ra hãy lưu trong thư mục làm việc chung và nêu đường dẫn trong câu trả lời.",
+    ].join("\n\n");
+    const task = this.enqueue({
+      agentId: target.id,
+      prompt,
+      title: clip(instructions, 60),
+      kind: "task",
+      createdBy: actor,
+      followUpOf: from.id,
+    });
+    this.store.addEvent({
+      agentId: from.agentId,
+      taskId: task.id,
+      type: "handoff",
+      activity: "handoff",
+      targetAgentId: target.id,
+      summary: `${actor ? `${actor.name}: ` : ""}${fromName} bàn giao cho ${target.name}: ${task.title}`,
+      actor: actor?.name,
+    });
     return task;
   }
 

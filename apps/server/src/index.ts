@@ -160,6 +160,15 @@ app.post<{ Params: { id: string } }>("/api/tasks/:id/cancel", async (req, reply)
   return { ok: true };
 });
 
+// hand-offs from the overview board
+app.post<{ Params: { id: string }; Body: { agentId?: string } }>("/api/tasks/:id/reassign", async (req, reply) => {
+  if (!mayCancel(req.user!, req.params.id)) return reply.code(403).send({ error: "Bạn chỉ chuyển được task do mình tạo" });
+  return orchestrator.reassign(req.params.id, String(req.body?.agentId ?? ""), actorOf(req.user!));
+});
+app.post<{ Params: { id: string }; Body: { agentId?: string; instructions?: string } }>("/api/tasks/:id/handoff", async (req) =>
+  orchestrator.handoff(req.params.id, req.body ?? {}, actorOf(req.user!)),
+);
+
 // agent settings (admin)
 app.get("/api/agents/settings", async () => orchestrator.agentConfigs());
 app.put<{ Params: { id: string }; Body: Partial<AgentSettings> }>("/api/agents/:id/settings", async (req) =>
