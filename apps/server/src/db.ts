@@ -5,6 +5,7 @@ import {
   type AgentStats,
   type DayStats,
   type MemoryItem,
+  type Schedule,
   type Approval,
   type Task,
   type TaskQuery,
@@ -28,6 +29,9 @@ export interface Persistence {
   deleteAgentSettings(agentId: string): Promise<void>;
   loadSetting<T>(key: string): Promise<T | undefined>;
   saveSetting(key: string, value: unknown): Promise<void>;
+  loadSchedules(): Promise<Schedule[]>;
+  saveSchedule(s: Schedule): Promise<void>;
+  deleteSchedule(id: string): Promise<void>;
   loadMemories(limit: number): Promise<MemoryItem[]>;
   saveMemory(m: MemoryItem): Promise<void>;
   deleteMemory(id: string): Promise<void>;
@@ -170,6 +174,24 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX memories_scope_idx ON memories (scope, agent_id, run_id);
   `,
+  `
+  ALTER TABLE tasks ADD COLUMN source text, ADD COLUMN source_ref text;
+  CREATE TABLE schedules (
+    id            uuid PRIMARY KEY,
+    name          text NOT NULL,
+    prompt        text NOT NULL,
+    agent_id      text,
+    cron          text NOT NULL,
+    enabled       boolean NOT NULL DEFAULT true,
+    created_by    text,
+    created_by_id uuid,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    updated_at    timestamptz NOT NULL DEFAULT now(),
+    last_run_at   timestamptz,
+    last_task_id  uuid,
+    last_skip     text
+  );
+  `,
 ];
 
 const ms = (d: Date | null | undefined) => (d ? d.getTime() : undefined);
@@ -188,6 +210,8 @@ const toTask = (r: Row): Task => ({
   createdBy: r.created_by ?? undefined,
   createdById: r.created_by_id ?? undefined,
   followUpOf: r.follow_up_of ?? undefined,
+  source: r.source ?? undefined,
+  sourceRef: r.source_ref ?? undefined,
   status: r.status,
   createdAt: ms(r.created_at)!,
   startedAt: ms(r.started_at),
@@ -236,6 +260,22 @@ const toMemory = (r: Row): MemoryItem => ({
   taskId: r.task_id ?? undefined,
   createdAt: ms(r.created_at),
   updatedAt: ms(r.updated_at),
+});
+
+const toSchedule = (r: Row): Schedule => ({
+  id: r.id,
+  name: r.name,
+  prompt: r.prompt,
+  agentId: r.agent_id ?? undefined,
+  cron: r.cron,
+  enabled: r.enabled,
+  createdBy: r.created_by ?? undefined,
+  createdById: r.created_by_id ?? undefined,
+  createdAt: ms(r.created_at)!,
+  updatedAt: ms(r.updated_at)!,
+  lastRunAt: ms(r.last_run_at),
+  lastTaskId: r.last_task_id ?? undefined,
+  lastSkip: r.last_skip ?? undefined,
 });
 
 const toUser = (r: Row): StoredUser => ({
@@ -320,8 +360,8 @@ export class PgPersistence implements Persistence, AuthRepo {
 
   saveTask(t: Task) {
     this.write(
-      `INSERT INTO tasks (id, title, prompt, agent_id, parent_id, status, created_at, started_at, finished_at, result, error, tokens_in, tokens_out, cost_usd, kind, created_by, created_by_id, follow_up_of)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+      `INSERT INTO tasks (id, title, prompt, agent_id, parent_id, status, created_at, started_at, finished_at, result, error, tokens_in, tokens_out, cost_usd, kind, created_by, created_by_id, follow_up_of, source, source_ref)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
        ON CONFLICT (id) DO UPDATE SET
          agent_id = EXCLUDED.agent_id,
          status = EXCLUDED.status, started_at = EXCLUDED.started_at, finished_at = EXCLUDED.finished_at,
@@ -330,7 +370,7 @@ export class PgPersistence implements Persistence, AuthRepo {
       [
         t.id, t.title, t.prompt, t.agentId, t.parentId ?? null, t.status, date(t.createdAt), date(t.startedAt), date(t.finishedAt),
         t.result ?? null, t.error ?? null, t.usage.tokensIn, t.usage.tokensOut, t.usage.costUsd, t.kind,
-        t.createdBy ?? null, t.createdById ?? null, t.followUpOf ?? null,
+        t.createdBy ?? null, t.createdById ?? null, t.followUpOf ?? null, t.source ?? null, t.sourceRef ?? null,
       ],
     );
   }
@@ -385,6 +425,27 @@ export class PgPersistence implements Persistence, AuthRepo {
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
       [key, JSON.stringify(value)],
     );
+  }
+
+  async loadSchedules() {
+    const { rows } = await this.pool.query(`SELECT * FROM schedules ORDER BY created_at`);
+    return rows.map(toSchedule);
+  }
+
+  async saveSchedule(x: Schedule) {
+    await this.pool.query(
+      `INSERT INTO schedules (id, name, prompt, agent_id, cron, enabled, created_by, created_by_id, created_at, updated_at, last_run_at, last_task_id, last_skip)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, prompt = EXCLUDED.prompt, agent_id = EXCLUDED.agent_id,
+         cron = EXCLUDED.cron, enabled = EXCLUDED.enabled, updated_at = EXCLUDED.updated_at,
+         last_run_at = EXCLUDED.last_run_at, last_task_id = EXCLUDED.last_task_id, last_skip = EXCLUDED.last_skip`,
+      [x.id, x.name, x.prompt, x.agentId ?? null, x.cron, x.enabled, x.createdBy ?? null, x.createdById ?? null,
+        date(x.createdAt), date(x.updatedAt), date(x.lastRunAt), x.lastTaskId ?? null, x.lastSkip ?? null],
+    );
+  }
+
+  async deleteSchedule(id: string) {
+    await this.pool.query(`DELETE FROM schedules WHERE id = $1`, [id]);
   }
 
   async loadMemories(limit: number) {

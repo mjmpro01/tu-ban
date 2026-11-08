@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { useCanCancel } from "./App";
 import { actions, store, useStore } from "./store";
-import { Portrait, TASK_LABEL, TimelineItem, fmtCost, fmtDateTime, fmtDuration, fmtTokens } from "./ui";
+import { Portrait, SourceBadge, TASK_LABEL, TimelineItem, fmtCost, fmtDateTime, fmtDuration, fmtTokens } from "./ui";
 
 const PAGE = 30;
 
@@ -169,6 +169,7 @@ function HistoryBody({ onClose }: { onClose: () => void }) {
                     <div className="history-item-top">
                       <span className={`task-status ts-${t.status}`}>{TASK_LABEL[t.status]}</span>
                       {t.kind === "review" && <span className="kind-badge">Review</span>}
+                      <SourceBadge task={t} />
                       <strong>
                         {t.parentId ? "↳ " : ""}
                         {t.title}

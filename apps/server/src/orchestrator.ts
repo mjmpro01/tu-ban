@@ -9,6 +9,7 @@ import {
   type MemoryScope,
   type Task,
   type TaskKind,
+  type TaskSource,
   type Usage,
   emptyUsage,
   sameValue,
@@ -201,12 +202,17 @@ export class Orchestrator {
   }
 
   /** A request from the user. Without an explicit agent it goes to the Manager, who plans and delegates. */
-  createTask(input: CreateTaskInput, actor?: Actor): Task {
+  createTask(input: CreateTaskInput, actor?: Actor, origin?: { source: TaskSource; sourceRef?: string }): Task {
     const prompt = input.prompt.trim();
     if (!prompt) throw new Error("Nội dung task trống");
     const agentId = input.agentId && this.configs.has(input.agentId) ? input.agentId : MANAGER_ID;
     if (!this.configs.get(agentId)!.enabled) throw new Error(`${this.configs.get(agentId)!.name} đang tắt`);
-    return this.enqueue({ agentId, prompt, title: clip(prompt, 60), kind: "task", createdBy: actor });
+    return this.enqueue({ agentId, prompt, title: clip(prompt, 60), kind: "task", createdBy: actor, ...origin });
+  }
+
+  /** Whether an agent exists and is switched on (for schedules and chat bots). */
+  agentEnabled(id: string) {
+    return !!this.configs.get(id)?.enabled;
   }
 
   private enqueue(p: {
@@ -217,6 +223,8 @@ export class Orchestrator {
     parentId?: string;
     createdBy?: Actor;
     followUpOf?: string;
+    source?: TaskSource;
+    sourceRef?: string;
   }): Task {
     const task: Task = {
       id: randomUUID(),
@@ -226,8 +234,10 @@ export class Orchestrator {
       parentId: p.parentId,
       kind: p.kind,
       createdBy: p.createdBy?.name,
-      createdById: p.createdBy?.id,
+      createdById: p.createdBy?.id || undefined,
       followUpOf: p.followUpOf,
+      source: p.source,
+      sourceRef: p.sourceRef,
       status: "queued",
       createdAt: Date.now(),
       usage: emptyUsage(),

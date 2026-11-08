@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentInfo, ProviderId, Task } from "@tu-ban/shared";
+import type { AgentEvent, AgentInfo, ProviderId, Task, TaskSource } from "@tu-ban/shared";
 
 export const PROVIDER_LABEL: Record<ProviderId, string> = { claude: "Claude", cursor: "Cursor", copilot: "Copilot", mock: "Demo" };
 export const STATUS_LABEL: Record<AgentInfo["status"], string> = {
@@ -69,5 +69,23 @@ export function TimelineItem({ event, agent }: { event: AgentEvent; agent?: Agen
         )}
       </div>
     </li>
+  );
+}
+
+const SOURCE: Partial<Record<TaskSource, [string, string]>> = {
+  schedule: ["⏰", "Chạy theo lịch"],
+  telegram: ["✈", "Gửi qua Telegram"],
+  slack: ["#", "Gửi qua Slack"],
+  github: ["🐙", "Từ GitHub"],
+};
+
+/** Small mark showing where a request came from (nothing for the dashboard). */
+export function SourceBadge({ task }: { task: Task }) {
+  const s = task.source && SOURCE[task.source];
+  if (!s) return null;
+  return (
+    <span className="source-badge" title={s[1]} aria-label={s[1]}>
+      {s[0]}
+    </span>
   );
 }

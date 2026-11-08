@@ -11,6 +11,7 @@ import {
   type MeResponse,
   type MemoryQuery,
   type MemoryScope,
+  type ScheduleInput,
   type ServerToClient,
   type TaskQuery,
   type UserInfo,
@@ -20,9 +21,10 @@ import Fastify, { type FastifyReply } from "fastify";
 import { Server } from "socket.io";
 import { AuthError, AuthService, MemoryAuthRepo, SESSION_COOKIE, SESSION_TTL_MS } from "./auth.ts";
 import { ADMIN_PASSWORD, ADMIN_USERNAME, COOKIE_SECURE, DATABASE_URL, MODE, PORT, ROOT, WORKDIR } from "./config.ts";
-import { Budget } from "./budget.ts";
+import { Budget, TIME_ZONE } from "./budget.ts";
 import { Memory } from "./memory.ts";
 import { Notifier } from "./notifier.ts";
+import { Scheduler } from "./schedules.ts";
 import { PgPersistence } from "./db.ts";
 import { type Actor, Orchestrator } from "./orchestrator.ts";
 import { deleteSkill, getSkill, listSkills, saveSkill, skillExists } from "./skills.ts";
@@ -52,6 +54,8 @@ await orchestrator.init();
 await memory.init();
 const notifier = new Notifier(store, budget);
 await notifier.init();
+const scheduler = new Scheduler(store, orchestrator, budget);
+await scheduler.init();
 
 // ---------------------------------------------------------------- auth
 let io: Server<ClientToServer, ServerToClient, Record<string, never>, SocketData> | undefined;
@@ -77,6 +81,7 @@ function adminOnly(method: string, path: string) {
     /^\/api\/(agents|skills|users)(\/|$)/.test(path) ||
     path.startsWith("/api/settings") ||
     (method !== "GET" && path.startsWith("/api/memory")) ||
+    (method !== "GET" && path.startsWith("/api/schedules")) ||
     (method === "POST" && path.startsWith("/api/approvals/"))
   );
 }
@@ -250,6 +255,16 @@ app.delete<{ Params: { id: string } }>("/api/memory/:id", async (req) => {
 });
 app.put("/api/settings/memory", async (req) => memory.updateSettings(req.body ?? {}));
 
+// schedules: everyone sees them, admins manage them
+app.get("/api/schedules", async () => ({ timeZone: TIME_ZONE, items: scheduler.list() }));
+app.post<{ Body: ScheduleInput }>("/api/schedules", async (req) => scheduler.create(req.body ?? {}, actorOf(req.user!)));
+app.put<{ Params: { id: string }; Body: ScheduleInput }>("/api/schedules/:id", async (req) => scheduler.update(req.params.id, req.body ?? {}));
+app.delete<{ Params: { id: string } }>("/api/schedules/:id", async (req) => {
+  await scheduler.remove(req.params.id);
+  return { ok: true };
+});
+app.post<{ Params: { id: string } }>("/api/schedules/:id/run", async (req) => scheduler.runNow(req.params.id));
+
 // task history
 app.get<{ Querystring: Record<string, string | undefined> }>("/api/tasks", async (req) => {
   const q = req.query;
@@ -333,6 +348,7 @@ await app.listen({ port: PORT, host: "0.0.0.0" });
 console.log(`AI office server on http://localhost:${PORT} (mode: ${MODE}, workdir: ${WORKDIR})`);
 
 const shutdown = async () => {
+  scheduler.stop();
   io?.close();
   await app.close();
   await db?.close();

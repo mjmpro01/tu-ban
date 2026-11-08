@@ -44,19 +44,21 @@ export const TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || "UT
 /** YYYY-MM-DD of a timestamp in the server's time zone. */
 const dayKey = (ms: number) => new Date(ms).toLocaleDateString("en-CA", { timeZone: TIME_ZONE });
 
+const TZ_FORMAT = new Intl.DateTimeFormat("en-US", {
+  timeZone: TIME_ZONE,
+  hourCycle: "h23",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
 /** Offset of the server's time zone from UTC at a given moment, in ms. */
-function tzOffsetMs(ms: number) {
+export function tzOffsetMs(ms: number) {
   const parts = Object.fromEntries(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: TIME_ZONE,
-      hourCycle: "h23",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    })
+    TZ_FORMAT
       .formatToParts(new Date(ms))
       .map((p) => [p.type, p.value]),
   );

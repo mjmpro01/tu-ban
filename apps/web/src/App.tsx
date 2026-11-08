@@ -5,11 +5,12 @@ import { AgentSettingsDialog } from "./AgentSettings";
 import { LoginScreen, PasswordDialog, UserMenu, UsersDialog } from "./Auth";
 import { HistoryDialog } from "./History";
 import { MemoryDialog } from "./Memory";
+import { SchedulesDialog } from "./Schedules";
 import { NotificationsDialog } from "./Notifications";
 import { OverviewBoard } from "./Overview";
 import { StatsDialog } from "./Stats";
 import { actions, auth, store, useStore } from "./store";
-import { PROVIDER_LABEL, Portrait, STATUS_LABEL, TASK_LABEL, TimelineItem, fmtCost, fmtTime, fmtTokens } from "./ui";
+import { PROVIDER_LABEL, Portrait, STATUS_LABEL, SourceBadge, TASK_LABEL, TimelineItem, fmtCost, fmtTime, fmtTokens } from "./ui";
 
 export function App() {
   const session = useStore((s) => s.auth);
@@ -40,6 +41,7 @@ function Office() {
   const [statsOpen, setStatsOpen] = useState(false);
   const [notifyOpen, setNotifyOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [schedulesOpen, setSchedulesOpen] = useState(false);
   const [view, setView] = useState<"office" | "overview">(() => {
     try {
       return localStorage.getItem("tuban:view") === "overview" ? "overview" : "office";
@@ -83,6 +85,7 @@ function Office() {
           onOpenStats={() => setStatsOpen(true)}
           onOpenNotifications={() => setNotifyOpen(true)}
           onOpenMemory={() => setMemoryOpen(true)}
+          onOpenSchedules={() => setSchedulesOpen(true)}
         />
         <Composer />
         <Approvals />
@@ -96,6 +99,7 @@ function Office() {
       <StatsDialog open={statsOpen} onClose={() => setStatsOpen(false)} />
       <NotificationsDialog open={notifyOpen} onClose={() => setNotifyOpen(false)} />
       <MemoryDialog open={memoryOpen} onClose={() => setMemoryOpen(false)} />
+      <SchedulesDialog open={schedulesOpen} onClose={() => setSchedulesOpen(false)} />
     </div>
   );
 }
@@ -125,6 +129,7 @@ function Header(props: {
   onOpenStats: () => void;
   onOpenNotifications: () => void;
   onOpenMemory: () => void;
+  onOpenSchedules: () => void;
 }) {
   const { onOpenHistory, onOpenSettings } = props;
   const isAdmin = useStore((s) => s.auth?.user?.role === "admin");
@@ -145,11 +150,19 @@ function Header(props: {
     <header className="header">
       <div className="title">
         <h1>Văn phòng AI</h1>
+        <span className={`pill ${connected ? "ok" : "bad"}`}>{connected ? "Đã kết nối" : "Mất kết nối"}</span>
+        {mode && <span className={`pill ${mode === "live" ? "live" : "demo"}`}>{mode === "live" ? "Live" : "Demo"}</span>}
+        <UserMenu onOpenUsers={props.onOpenUsers} onOpenPassword={props.onOpenPassword} onOpenNotifications={props.onOpenNotifications} />
+      </div>
+      <nav className="header-nav" aria-label="Màn hình">
         <button type="button" className="secondary small" onClick={onOpenHistory}>
           Lịch sử
         </button>
         <button type="button" className="secondary small" onClick={props.onOpenStats}>
           Thống kê
+        </button>
+        <button type="button" className="secondary small" onClick={props.onOpenSchedules}>
+          Lịch chạy
         </button>
         <button type="button" className="secondary small" onClick={props.onOpenMemory}>
           Bộ nhớ
@@ -159,10 +172,7 @@ function Header(props: {
             Quản lý agent
           </button>
         )}
-        <UserMenu onOpenUsers={props.onOpenUsers} onOpenPassword={props.onOpenPassword} onOpenNotifications={props.onOpenNotifications} />
-        <span className={`pill ${connected ? "ok" : "bad"}`}>{connected ? "Đã kết nối" : "Mất kết nối"}</span>
-        {mode && <span className={`pill ${mode === "live" ? "live" : "demo"}`}>{mode === "live" ? "Live" : "Demo"}</span>}
-      </div>
+      </nav>
       <div className="stats">
         <Stat label="Đang làm" value={`${totals.working}/${Object.values(agents).filter((a) => a.enabled).length}`} />
         <Stat label="Task mở" value={String(active)} />
@@ -409,6 +419,7 @@ function TaskItem({ task: t, parent, compact, children }: { task: Task; parent?:
       <div className="task-head">
         <span className={`task-status ts-${t.status}`}>{TASK_LABEL[t.status]}</span>
         {t.kind === "review" && <span className="kind-badge">Review</span>}
+        <SourceBadge task={t} />
         <strong>{t.title}</strong>
       </div>
       <div className="muted">

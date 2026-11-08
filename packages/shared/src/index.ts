@@ -149,6 +149,8 @@ export interface AgentConfigView extends AgentSettings {
 /** "review" = a check of another task's result, created by the Manager. */
 export type TaskKind = "task" | "review";
 
+export type TaskSource = "web" | "schedule" | "telegram" | "slack" | "github";
+
 export type TaskStatus = "queued" | "running" | "waiting_approval" | "done" | "error" | "cancelled";
 
 export interface Task {
@@ -167,6 +169,10 @@ export interface Task {
   createdById?: string;
   /** The finished task this one continues (a hand-off from the overview board). */
   followUpOf?: string;
+  /** Where the request came from (unset = the dashboard). */
+  source?: TaskSource;
+  /** For schedules: the schedule id. For chats: the chat the answer goes back to. */
+  sourceRef?: string;
   startedAt?: number;
   finishedAt?: number;
   result?: string;
@@ -343,6 +349,36 @@ export interface MemoryQuery {
   limit?: number;
 }
 
+// ---------------------------------------------------------------- schedules
+/** A request that runs again and again (cron in the server's time zone). */
+export interface Schedule {
+  id: string;
+  name: string;
+  prompt: string;
+  /** Unset = the Manager (who can delegate to the team). */
+  agentId?: string;
+  /** Five fields: minute hour day-of-month month day-of-week. */
+  cron: string;
+  enabled: boolean;
+  createdBy?: string;
+  createdById?: string;
+  createdAt: number;
+  updatedAt: number;
+  nextRunAt?: number;
+  lastRunAt?: number;
+  lastTaskId?: string;
+  /** Why the last run did not start (previous run still busy, budget, agent off…). */
+  lastSkip?: string;
+}
+
+export interface ScheduleInput {
+  name?: string;
+  prompt?: string;
+  agentId?: string | null;
+  cron?: string;
+  enabled?: boolean;
+}
+
 export interface Snapshot {
   mode: "demo" | "live";
   agents: AgentInfo[];
@@ -421,3 +457,96 @@ export function toolActivity(tool: string): Activity {
 }
 
 export const emptyUsage = (): Usage => ({ tokensIn: 0, tokensOut: 0, costUsd: 0 });
+
+// ---------------------------------------------------------------- cron
+export interface CronFields {
+  minute: number[];
+  hour: number[];
+  dom: number[];
+  month: number[];
+  /** 0 = Sunday. */
+  dow: number[];
+  domAny: boolean;
+  dowAny: boolean;
+}
+
+const CRON_ALIASES: Record<string, string> = {
+  "@hourly": "0 * * * *",
+  "@daily": "0 0 * * *",
+  "@weekly": "0 0 * * 0",
+  "@monthly": "0 0 1 * *",
+};
+
+/** Parse a five-field cron expression ("*", lists, ranges and steps). Throws a readable error. */
+export function parseCron(expr: string): CronFields {
+  const text = CRON_ALIASES[expr.trim()] ?? expr.trim();
+  const parts = text.split(/\s+/);
+  if (parts.length !== 5) throw new Error("Lịch cần đúng 5 phần: phút giờ ngày tháng thứ");
+  const limits: [string, number, number][] = [
+    ["phút", 0, 59],
+    ["giờ", 0, 23],
+    ["ngày", 1, 31],
+    ["tháng", 1, 12],
+    ["thứ", 0, 7],
+  ];
+  const sets = parts.map((part, i) => {
+    const [label, lo, hi] = limits[i];
+    const out = new Set<number>();
+    for (const item of part.split(",")) {
+      const m = /^(\*|\d+(?:-\d+)?)(?:\/(\d+))?$/.exec(item);
+      if (!m) throw new Error(`Phần ${label} không hợp lệ: "${item}"`);
+      const step = m[2] ? Number(m[2]) : 1;
+      if (step < 1) throw new Error(`Bước nhảy của ${label} phải lớn hơn 0`);
+      let from = lo;
+      let to = hi;
+      if (m[1] !== "*") {
+        const [a, b] = m[1].split("-").map(Number);
+        from = a;
+        to = b ?? (m[2] ? hi : a);
+      }
+      if (from < lo || to > hi || from > to) throw new Error(`${label} phải trong khoảng ${lo}–${hi}`);
+      for (let v = from; v <= to; v += step) out.add(i === 4 && v === 7 ? 0 : v);
+    }
+    return [...out].sort((a, b) => a - b);
+  });
+  return {
+    minute: sets[0],
+    hour: sets[1],
+    dom: sets[2],
+    month: sets[3],
+    dow: sets[4],
+    domAny: parts[2] === "*",
+    dowAny: parts[4] === "*",
+  };
+}
+
+const DOW_NAME = ["Chủ nhật", "Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7"];
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** A short Vietnamese description of a cron expression ("Thứ 2–6 lúc 08:00"). */
+export function describeCron(expr: string): string {
+  let c: CronFields;
+  try {
+    c = parseCron(expr);
+  } catch {
+    return expr;
+  }
+  const everyMinute = c.minute.length === 60;
+  const everyHour = c.hour.length === 24;
+  let time: string;
+  if (everyMinute && everyHour) time = "mỗi phút";
+  else if (everyHour && c.minute.length > 1 && c.minute[0] === 0 && 60 % c.minute[1] === 0 && c.minute.length === 60 / c.minute[1])
+    time = `mỗi ${c.minute[1]} phút`;
+  else if (everyHour && c.minute.length === 1) time = `mỗi giờ vào phút ${c.minute[0]}`;
+  else if (c.minute.length === 1 && c.hour.length <= 4) time = `lúc ${c.hour.map((h) => `${pad2(h)}:${pad2(c.minute[0])}`).join(", ")}`;
+  else return expr;
+  let days = "";
+  if (!c.dowAny && c.domAny) {
+    const d = c.dow.join(",");
+    days = d === "1,2,3,4,5" ? "Thứ 2–6" : d === "0,6" ? "Cuối tuần" : c.dow.map((x) => DOW_NAME[x]).join(", ");
+  } else if (!c.domAny && c.dowAny) days = `Ngày ${c.dom.join(", ")} hằng tháng`;
+  else if (!c.domAny || !c.dowAny) return expr;
+  if (c.month.length !== 12) return expr;
+  const text = days ? `${days} ${time}` : time.startsWith("mỗi") ? time : `Mỗi ngày ${time}`;
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
