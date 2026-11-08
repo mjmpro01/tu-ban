@@ -60,3 +60,9 @@ export const COOKIE_SECURE = env.COOKIE_SECURE ? env.COOKIE_SECURE === "1" : PUB
 
 /** Default ceiling for all spending in one day, in USD (0 = no daily limit). Editable in the dashboard. */
 export const DAILY_BUDGET_USD = Number(env.DAILY_BUDGET_USD ?? 0);
+
+/** Notifications. Secrets stay in the environment: they are never stored in the database or shown in the dashboard. */
+export const TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN;
+export const TELEGRAM_CHAT_ID = env.TELEGRAM_CHAT_ID;
+export const TELEGRAM_API_BASE = (env.TELEGRAM_API_BASE ?? "https://api.telegram.org").replace(/\/$/, "");
+export const SLACK_WEBHOOK_URL = env.SLACK_WEBHOOK_URL;

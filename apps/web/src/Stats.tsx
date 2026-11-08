@@ -66,7 +66,7 @@ function StatsBody() {
   const usedPct = daily > 0 ? Math.min(100, (stats.today.costUsd / daily) * 100) : 0;
 
   return (
-    <div className="stats">
+    <div className="stats-view">
       <div className="stats-toolbar" role="group" aria-label="Khoảng thời gian">
         {RANGES.map((r) => (
           <button key={r} type="button" className={`chip ${r === days ? "on" : ""}`} aria-pressed={r === days} onClick={() => setDays(r)}>

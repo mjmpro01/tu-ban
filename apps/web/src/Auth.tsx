@@ -83,7 +83,15 @@ export function LoginScreen({ needsSetup }: { needsSetup: boolean }) {
 }
 
 /** Name + role in the header with account actions. */
-export function UserMenu({ onOpenUsers, onOpenPassword }: { onOpenUsers: () => void; onOpenPassword: () => void }) {
+export function UserMenu({
+  onOpenUsers,
+  onOpenPassword,
+  onOpenNotifications,
+}: {
+  onOpenUsers: () => void;
+  onOpenPassword: () => void;
+  onOpenNotifications: () => void;
+}) {
   const user = useStore((s) => s.auth?.user);
   const ref = useRef<HTMLDetailsElement>(null);
   if (!user) return null;
@@ -100,9 +108,14 @@ export function UserMenu({ onOpenUsers, onOpenPassword }: { onOpenUsers: () => v
       <div className="user-menu-panel" role="menu">
         <div className="muted">@{user.username}</div>
         {user.role === "admin" && (
-          <button type="button" role="menuitem" onClick={pick(onOpenUsers)}>
-            Quản lý người dùng
-          </button>
+          <>
+            <button type="button" role="menuitem" onClick={pick(onOpenUsers)}>
+              Quản lý người dùng
+            </button>
+            <button type="button" role="menuitem" onClick={pick(onOpenNotifications)}>
+              Thông báo
+            </button>
+          </>
         )}
         <button type="button" role="menuitem" onClick={pick(onOpenPassword)}>
           Đổi mật khẩu

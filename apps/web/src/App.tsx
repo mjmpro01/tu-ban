@@ -4,6 +4,7 @@ import { createGame } from "./game/OfficeScene";
 import { AgentSettingsDialog } from "./AgentSettings";
 import { LoginScreen, PasswordDialog, UserMenu, UsersDialog } from "./Auth";
 import { HistoryDialog } from "./History";
+import { NotificationsDialog } from "./Notifications";
 import { StatsDialog } from "./Stats";
 import { actions, auth, store, useStore } from "./store";
 import { PROVIDER_LABEL, Portrait, STATUS_LABEL, TASK_LABEL, TimelineItem, fmtCost, fmtTime, fmtTokens } from "./ui";
@@ -35,6 +36,7 @@ function Office() {
   const [usersOpen, setUsersOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
+  const [notifyOpen, setNotifyOpen] = useState(false);
   return (
     <div className="app">
       <main className="office">
@@ -48,6 +50,7 @@ function Office() {
           onOpenUsers={() => setUsersOpen(true)}
           onOpenPassword={() => setPasswordOpen(true)}
           onOpenStats={() => setStatsOpen(true)}
+          onOpenNotifications={() => setNotifyOpen(true)}
         />
         <Composer />
         <Approvals />
@@ -59,6 +62,7 @@ function Office() {
       <UsersDialog open={usersOpen} onClose={() => setUsersOpen(false)} />
       <PasswordDialog open={passwordOpen} onClose={() => setPasswordOpen(false)} />
       <StatsDialog open={statsOpen} onClose={() => setStatsOpen(false)} />
+      <NotificationsDialog open={notifyOpen} onClose={() => setNotifyOpen(false)} />
     </div>
   );
 }
@@ -78,6 +82,7 @@ function Header(props: {
   onOpenUsers: () => void;
   onOpenPassword: () => void;
   onOpenStats: () => void;
+  onOpenNotifications: () => void;
 }) {
   const { onOpenHistory, onOpenSettings } = props;
   const isAdmin = useStore((s) => s.auth?.user?.role === "admin");
@@ -109,7 +114,7 @@ function Header(props: {
             Quản lý agent
           </button>
         )}
-        <UserMenu onOpenUsers={props.onOpenUsers} onOpenPassword={props.onOpenPassword} />
+        <UserMenu onOpenUsers={props.onOpenUsers} onOpenPassword={props.onOpenPassword} onOpenNotifications={props.onOpenNotifications} />
         <span className={`pill ${connected ? "ok" : "bad"}`}>{connected ? "Đã kết nối" : "Mất kết nối"}</span>
         {mode && <span className={`pill ${mode === "live" ? "live" : "demo"}`}>{mode === "live" ? "Live" : "Demo"}</span>}
       </div>

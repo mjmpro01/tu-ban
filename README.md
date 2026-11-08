@@ -40,6 +40,32 @@ Biến này chỉ có tác dụng khi chưa có tài khoản nào.
 - Lịch sử ghi lại ai giao task, ai duyệt lệnh, ai sửa cấu hình.
 - Không có `DATABASE_URL` thì tài khoản chỉ nằm trong bộ nhớ: tắt server là mất, lần sau phải tạo lại (hoặc dùng `ADMIN_USERNAME` / `ADMIN_PASSWORD`).
 
+### Thông báo (Telegram / Slack)
+
+Đặt biến môi trường trên server rồi khởi động lại:
+
+```bash
+TELEGRAM_BOT_TOKEN=123456:ABC... TELEGRAM_CHAT_ID=987654321 npm run dev
+```
+
+```bash
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/... npm run dev
+```
+
+- Telegram: tạo bot với @BotFather để lấy token, nhắn cho bot một tin rồi lấy `chat_id` (người hoặc nhóm nhận tin).
+- Slack: tạo *Incoming Webhook* cho kênh muốn nhận tin.
+
+Admin vào **menu người dùng → Thông báo** để xem kênh nào đã cấu hình, bấm **Gửi thử**, và bật/tắt từng loại:
+- Agent cần duyệt.
+- Yêu cầu hoàn thành (không tính việc con), kèm tóm tắt kết quả.
+- Yêu cầu lỗi.
+- Ngân sách ngày chạm 80% và 100%.
+
+Lưu ý:
+- Token và webhook chỉ nằm trong biến môi trường: không lưu vào database, không hiện trên dashboard, không ghi vào log.
+- Tin nhắn có link về `PUBLIC_URL`, nên đặt biến này thành địa chỉ thật của dashboard.
+- Gửi lỗi (mạng, token sai…) không làm hỏng việc của agent: lỗi được ghi log và hiện ở màn hình Thông báo.
+
 ### Lưu dữ liệu vào Postgres
 
 Task, lịch sử hoạt động, yêu cầu duyệt và chỉ số token / chi phí của từng agent được lưu vào Postgres khi có biến `DATABASE_URL`. Bảng tự tạo lúc server khởi động (migration nằm trong `apps/server/src/db.ts`).
@@ -104,6 +130,10 @@ Server phục vụ luôn bản web đã build ở http://localhost:8787.
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` |  | Tạo admin đầu tiên khi chưa có tài khoản nào |
 | `PUBLIC_URL` | `http://localhost:PORT` | Địa chỉ công khai của dashboard (link trong thông báo; https thì bật cookie `Secure`) |
 | `COOKIE_SECURE` | theo `PUBLIC_URL` | `1` để chỉ gửi cookie qua HTTPS |
+| `DAILY_BUDGET_USD` | `0` | Ngân sách ngày ban đầu (0 = không giới hạn; sửa được trên dashboard) |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` |  | Gửi thông báo qua Telegram |
+| `SLACK_WEBHOOK_URL` |  | Gửi thông báo qua Slack |
+| `TZ` | múi giờ máy | Múi giờ dùng để tính "ngày" cho thống kê và ngân sách, vd. `Asia/Ho_Chi_Minh` |
 
 ## Các agent
 

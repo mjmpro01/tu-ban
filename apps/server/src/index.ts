@@ -5,6 +5,7 @@ import fastifyStatic from "@fastify/static";
 import {
   type AgentSettings,
   type BudgetSettings,
+  type NotificationEvents,
   CSRF_HEADER,
   type ClientToServer,
   type MeResponse,
@@ -18,6 +19,7 @@ import { Server } from "socket.io";
 import { AuthError, AuthService, MemoryAuthRepo, SESSION_COOKIE, SESSION_TTL_MS } from "./auth.ts";
 import { ADMIN_PASSWORD, ADMIN_USERNAME, COOKIE_SECURE, DATABASE_URL, MODE, PORT, ROOT, WORKDIR } from "./config.ts";
 import { Budget } from "./budget.ts";
+import { Notifier } from "./notifier.ts";
 import { PgPersistence } from "./db.ts";
 import { type Actor, Orchestrator } from "./orchestrator.ts";
 import { deleteSkill, getSkill, listSkills, saveSkill, skillExists } from "./skills.ts";
@@ -43,6 +45,8 @@ const budget = new Budget(store);
 await budget.init();
 const orchestrator = new Orchestrator(store, budget);
 await orchestrator.init();
+const notifier = new Notifier(store, budget);
+await notifier.init();
 
 // ---------------------------------------------------------------- auth
 let io: Server<ClientToServer, ServerToClient, Record<string, never>, SocketData> | undefined;
@@ -192,6 +196,11 @@ app.put<{ Body: Partial<BudgetSettings> }>("/api/settings/budget", async (req) =
   console.log(`[budget] ${req.user!.displayName} cập nhật hạn mức: ${JSON.stringify(next)}`);
   return next;
 });
+
+// notifications (admin)
+app.get("/api/settings/notifications", async () => notifier.status());
+app.put<{ Body: Partial<NotificationEvents> }>("/api/settings/notifications", async (req) => notifier.updateEvents(req.body ?? {}));
+app.post("/api/settings/notifications/test", async (req) => notifier.test(req.user!.displayName));
 
 // task history
 app.get<{ Querystring: Record<string, string | undefined> }>("/api/tasks", async (req) => {

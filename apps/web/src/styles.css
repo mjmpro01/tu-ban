@@ -190,7 +190,8 @@ button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2p
 .icon-button { background: none; border: 0; color: var(--muted); font-size: 16px; padding: 4px 8px; border-radius: 6px; }
 .icon-button:hover { color: var(--text); background: var(--panel-2); }
 .see-all { margin-top: 8px; align-self: flex-start; }
-.header .title h1 + .secondary { margin-right: auto; }
+.header .title h1 { margin-right: 4px; }
+.header .title .user-menu { margin-left: auto; }
 .header h1 { margin: 0; }
 
 /* ---------------------------------------------------------------- history dialog */
@@ -381,7 +382,7 @@ button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2p
 
 /* ---------------------------------------------------------------- stats & budget */
 .stats-dialog { width: min(980px, calc(100vw - 32px)); }
-.stats { display: flex; flex-direction: column; gap: 14px; }
+.stats-view { display: flex; flex-direction: column; gap: 14px; }
 .stats-toolbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .stats-toolbar .muted { margin-left: auto; }
 .chip { background: transparent; border: 1px solid var(--border); border-radius: 999px; padding: 3px 12px; font-size: 12px; color: var(--muted); }
@@ -420,5 +421,12 @@ button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2p
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .charts { grid-template-columns: 1fr; }
   .budget-grid { grid-template-columns: 1fr; }
-  .stats .data-table { font-size: 12px; }
+  .stats-view .data-table { font-size: 12px; }
 }
+
+/* ---------------------------------------------------------------- notifications */
+.channels { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.channel { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: flex-start; font-size: 13px; padding: 6px 0; border-top: 1px solid #3a2a20; }
+.channel .error, .channel .success { margin: 4px 0 0; font-size: 12px; }
+.kind-badge.ok { color: var(--ok); border-color: var(--ok); }
+.env-hint { font-size: 11px; white-space: nowrap; overflow-x: auto; max-width: 100%; }

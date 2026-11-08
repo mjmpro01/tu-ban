@@ -266,6 +266,25 @@ export interface StatsResponse {
   budget: BudgetSettings;
 }
 
+/** Which events send a notification (admins switch them on and off). */
+export interface NotificationEvents {
+  /** An agent waits for approval. */
+  approval: boolean;
+  /** A request finished. */
+  done: boolean;
+  /** A request failed. */
+  error: boolean;
+  /** The daily budget reached 80% / 100%. */
+  budget: boolean;
+}
+
+export interface NotificationStatus {
+  events: NotificationEvents;
+  channels: Record<"telegram" | "slack", { configured: boolean; lastError?: string }>;
+  publicUrl: string;
+  lastSentAt?: number;
+}
+
 export interface Snapshot {
   mode: "demo" | "live";
   agents: AgentInfo[];
