@@ -40,6 +40,42 @@ Biến này chỉ có tác dụng khi chưa có tài khoản nào.
 - Lịch sử ghi lại ai giao task, ai duyệt lệnh, ai sửa cấu hình.
 - Không có `DATABASE_URL` thì tài khoản chỉ nằm trong bộ nhớ: tắt server là mất, lần sau phải tạo lại (hoặc dùng `ADMIN_USERNAME` / `ADMIN_PASSWORD`).
 
+### Bảng tổng quan & bàn giao
+
+Tab **Bảng tổng quan** (cạnh tab Văn phòng) cho thấy cả văn phòng trên một màn hình:
+
+- **Mỗi agent một cột:**
+  - Đang làm gì (task, bước hiện tại, đã chạy bao lâu, có đang chờ duyệt không).
+  - **Hàng đợi** các việc sắp làm.
+  - Các việc **vừa xong**.
+- **Luồng công việc đang mở:** mỗi yêu cầu hiện các bước theo thứ tự (Manager điều phối → các việc con → review) và **đang chờ agent nào**.
+- **Chuyển việc:** đưa một task chưa bắt đầu trong hàng đợi sang agent khác (vd. agent đang rảnh). Thành viên chỉ chuyển được task của mình. Việc con không chuyển được cho Manager, vì Manager đang chờ chính việc đó.
+- **Bàn giao tiếp:** từ một việc đã xong, giao việc tiếp theo cho agent khác.
+  - Kết quả cũ được chuyển kèm làm bối cảnh.
+  - Có gợi ý nên giao cho ai (Researcher → Writer, Dev → Researcher review…).
+  - Task mới ghi lại là "tiếp nối" task cũ, xem được trong Lịch sử.
+
+### Thống kê & ngân sách
+
+Nút **Thống kê** (mọi người xem được):
+- Chi phí hôm nay so với ngân sách ngày.
+- Số yêu cầu, tỉ lệ thành công.
+- Biểu đồ chi phí và số yêu cầu theo ngày (7 / 14 / 30 ngày).
+- Bảng theo từng agent: số task, tỉ lệ thành công, thời gian trung bình, token, chi phí.
+
+Ngày được tính theo múi giờ của server (biến `TZ`).
+
+**Hạn mức** (chỉ admin sửa, áp dụng ngay cho task bắt đầu sau đó):
+
+| Hạn mức | Mặc định | Ý nghĩa |
+|---|---|---|
+| Ngân sách mỗi ngày | `DAILY_BUDGET_USD` = 0 | 0 = không giới hạn. Hết ngân sách thì task mới báo lỗi và không chạy; mỗi task Claude chỉ được tiêu tối đa phần còn lại trong ngày |
+| Tối đa mỗi yêu cầu | `MAX_TREE_BUDGET_USD` = 5 | Cho cả nhóm (Manager + việc con) |
+| Tối đa mỗi task | `MAX_BUDGET_USD` = 1 | Một agent Claude dừng khi vượt |
+| Số việc con / lần review / lượt | 8 / 2 / 30 | Như trước, giờ sửa được trên dashboard |
+
+Biến môi trường chỉ là giá trị khởi đầu; giá trị admin lưu trên dashboard nằm trong bảng `app_settings` và được ưu tiên hơn.
+
 ### Thông báo (Telegram / Slack)
 
 Đặt biến môi trường trên server rồi khởi động lại:
