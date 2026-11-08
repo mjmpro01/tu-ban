@@ -2,6 +2,8 @@ import {
   ACTIVE_STATUSES,
   type AgentEvent,
   type AgentSettings,
+  type AgentStats,
+  type DayStats,
   type Approval,
   type Task,
   type TaskQuery,
@@ -23,6 +25,11 @@ export interface Persistence {
   loadAgentSettings(): Promise<Record<string, Partial<AgentSettings>>>;
   saveAgentSettings(agentId: string, settings: Partial<AgentSettings>): Promise<void>;
   deleteAgentSettings(agentId: string): Promise<void>;
+  loadSetting<T>(key: string): Promise<T | undefined>;
+  saveSetting(key: string, value: unknown): Promise<void>;
+  /** Spending since `since` (ms), all tasks. */
+  spentSince(since: number): Promise<number>;
+  stats(days: number, timeZone: string): Promise<{ days: DayStats[]; agents: AgentStats[] }>;
   listTasks(query: TaskQuery & { limit: number }): Promise<Task[]>;
   /** Wait for queued writes, then close the pool. */
   close(): Promise<void>;
@@ -133,6 +140,13 @@ const MIGRATIONS: string[] = [
   ALTER TABLE tasks ADD COLUMN created_by_id uuid;
   ALTER TABLE approvals ADD COLUMN decided_by text;
   ALTER TABLE events ADD COLUMN actor text;
+  `,
+  `
+  CREATE TABLE app_settings (
+    key         text PRIMARY KEY,
+    value       jsonb NOT NULL,
+    updated_at  timestamptz NOT NULL DEFAULT now()
+  );
   `,
 ];
 
@@ -322,6 +336,74 @@ export class PgPersistence implements Persistence, AuthRepo {
     if (!/^[0-9a-f-]{36}$/i.test(taskId)) return [];
     const { rows } = await this.pool.query(`SELECT * FROM events WHERE task_id = $1 ORDER BY ts`, [taskId]);
     return rows.map(toEvent);
+  }
+
+  async loadSetting<T>(key: string) {
+    const { rows } = await this.pool.query(`SELECT value FROM app_settings WHERE key = $1`, [key]);
+    return rows[0]?.value as T | undefined;
+  }
+
+  async saveSetting(key: string, value: unknown) {
+    await this.pool.query(
+      `INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [key, JSON.stringify(value)],
+    );
+  }
+
+  async spentSince(since: number) {
+    await this.queue;
+    const { rows } = await this.pool.query(`SELECT coalesce(sum(cost_usd), 0) AS c FROM tasks WHERE created_at >= $1`, [date(since)]);
+    return num(rows[0].c);
+  }
+
+  async stats(days: number, timeZone: string) {
+    await this.queue;
+    const daily = await this.pool.query(
+      `SELECT to_char(date_trunc('day', created_at AT TIME ZONE $2), 'YYYY-MM-DD') AS day,
+              count(*) FILTER (WHERE parent_id IS NULL)::int AS requests,
+              count(*) FILTER (WHERE parent_id IS NULL AND status = 'done')::int AS done,
+              count(*) FILTER (WHERE parent_id IS NULL AND status = 'error')::int AS errors,
+              coalesce(sum(cost_usd), 0) AS cost,
+              coalesce(sum(tokens_in + tokens_out), 0) AS tokens
+         FROM tasks
+        WHERE created_at >= (date_trunc('day', now() AT TIME ZONE $2) - make_interval(days => $1 - 1)) AT TIME ZONE $2
+        GROUP BY 1`,
+      [days, timeZone],
+    );
+    const perAgent = await this.pool.query(
+      `SELECT agent_id,
+              count(*)::int AS tasks,
+              count(*) FILTER (WHERE status = 'done')::int AS done,
+              count(*) FILTER (WHERE status = 'error')::int AS errors,
+              coalesce(sum(cost_usd), 0) AS cost,
+              coalesce(sum(tokens_in + tokens_out), 0) AS tokens,
+              avg(extract(epoch FROM finished_at - started_at) * 1000)
+                FILTER (WHERE status = 'done' AND started_at IS NOT NULL AND finished_at IS NOT NULL) AS avg_ms
+         FROM tasks
+        WHERE created_at >= (date_trunc('day', now() AT TIME ZONE $2) - make_interval(days => $1 - 1)) AT TIME ZONE $2
+        GROUP BY agent_id`,
+      [days, timeZone],
+    );
+    return {
+      days: daily.rows.map((r) => ({
+        date: r.day as string,
+        requests: r.requests as number,
+        done: r.done as number,
+        errors: r.errors as number,
+        costUsd: num(r.cost),
+        tokens: num(r.tokens),
+      })),
+      agents: perAgent.rows.map((r) => ({
+        agentId: r.agent_id as string,
+        tasks: r.tasks as number,
+        done: r.done as number,
+        errors: r.errors as number,
+        costUsd: num(r.cost),
+        tokens: num(r.tokens),
+        avgDurationMs: r.avg_ms === null ? null : Number(r.avg_ms),
+      })),
+    };
   }
 
   async loadAgentSettings() {

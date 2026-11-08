@@ -2,7 +2,6 @@ import { type CanUseTool, type SDKMessage, createSdkMcpServer, query, tool } fro
 import { z } from "zod";
 import { toolActivity } from "@tu-ban/shared";
 import { TOOL_GROUPS } from "@tu-ban/shared";
-import { MAX_BUDGET_USD, MAX_TURNS } from "../config.ts";
 import { type AgentProvider, type RunContext, type RunResult, type TeamApi, clip, summarizeToolInput } from "./types.ts";
 
 /** Harmless internal tools that are not part of the configurable groups. */
@@ -137,8 +136,8 @@ export const claudeProvider: AgentProvider = {
         permissionMode: "default",
         disallowedTools,
         canUseTool,
-        maxTurns: MAX_TURNS,
-        maxBudgetUsd: MAX_BUDGET_USD,
+        maxTurns: ctx.limits.maxTurns,
+        maxBudgetUsd: ctx.limits.maxBudgetUsd,
         abortController,
         ...(ctx.team ? { mcpServers: { [TEAM_SERVER]: teamServer(ctx.team) } } : {}),
       },

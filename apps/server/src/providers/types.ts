@@ -44,6 +44,8 @@ export interface RunContext {
   team?: TeamApi;
   /** What this agent may do with a tool (from its tool permissions; unknown tools are "ask"). */
   toolMode(tool: string): ToolMode;
+  /** Spending / turn ceilings for this run (already reduced to what is left of the daily budget). */
+  limits: { maxBudgetUsd: number; maxTurns: number };
   /** Skills from the library this agent may use (only ones that still exist). */
   skills: string[];
   /** Ask the human to approve a risky action. Resolves true when approved. */

@@ -4,6 +4,7 @@ import fastifyCookie from "@fastify/cookie";
 import fastifyStatic from "@fastify/static";
 import {
   type AgentSettings,
+  type BudgetSettings,
   CSRF_HEADER,
   type ClientToServer,
   type MeResponse,
@@ -16,6 +17,7 @@ import Fastify, { type FastifyReply } from "fastify";
 import { Server } from "socket.io";
 import { AuthError, AuthService, MemoryAuthRepo, SESSION_COOKIE, SESSION_TTL_MS } from "./auth.ts";
 import { ADMIN_PASSWORD, ADMIN_USERNAME, COOKIE_SECURE, DATABASE_URL, MODE, PORT, ROOT, WORKDIR } from "./config.ts";
+import { Budget } from "./budget.ts";
 import { PgPersistence } from "./db.ts";
 import { type Actor, Orchestrator } from "./orchestrator.ts";
 import { deleteSkill, getSkill, listSkills, saveSkill, skillExists } from "./skills.ts";
@@ -37,7 +39,9 @@ const app = Fastify({ logger: false, trustProxy: true });
 const db = DATABASE_URL ? await PgPersistence.connect(DATABASE_URL) : undefined;
 if (!db) console.warn("DATABASE_URL chưa đặt: dữ liệu chỉ nằm trong bộ nhớ và sẽ mất khi tắt server.");
 const store = new Store(db);
-const orchestrator = new Orchestrator(store);
+const budget = new Budget(store);
+await budget.init();
+const orchestrator = new Orchestrator(store, budget);
 await orchestrator.init();
 
 // ---------------------------------------------------------------- auth
@@ -179,6 +183,14 @@ app.delete<{ Params: { name: string } }>("/api/skills/:name", async (req) => {
   await deleteSkill(req.params.name);
   await orchestrator.forgetSkill(req.params.name, actorOf(req.user!));
   return { ok: true };
+});
+
+// statistics (everyone) and spending limits (admins change them)
+app.get<{ Querystring: { days?: string } }>("/api/stats", async (req) => budget.stats(Number(req.query.days ?? 14) || 14));
+app.put<{ Body: Partial<BudgetSettings> }>("/api/settings/budget", async (req) => {
+  const next = await budget.update(req.body ?? {});
+  console.log(`[budget] ${req.user!.displayName} cập nhật hạn mức: ${JSON.stringify(next)}`);
+  return next;
 });
 
 // task history

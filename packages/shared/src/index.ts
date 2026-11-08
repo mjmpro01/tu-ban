@@ -221,6 +221,51 @@ export interface Approval {
   decidedBy?: string;
 }
 
+/** Spending and teamwork limits, editable by admins in "Thống kê & ngân sách". */
+export interface BudgetSettings {
+  /** Hard ceiling per task for Claude agents (USD). */
+  maxTaskUsd: number;
+  /** Ceiling for one user request and everything the Manager delegates for it (USD). */
+  maxRequestUsd: number;
+  /** Ceiling for all spending in one day (USD). 0 = no daily limit. */
+  dailyUsd: number;
+  maxSubtasks: number;
+  maxReviewRounds: number;
+  /** Max agent turns per task. */
+  maxTurns: number;
+}
+
+export interface DayStats {
+  /** YYYY-MM-DD in the server's time zone */
+  date: string;
+  /** Requests created that day (sub-tasks not counted). */
+  requests: number;
+  done: number;
+  errors: number;
+  /** All spending that day, sub-tasks included. */
+  costUsd: number;
+  tokens: number;
+}
+
+export interface AgentStats {
+  agentId: string;
+  tasks: number;
+  done: number;
+  errors: number;
+  costUsd: number;
+  tokens: number;
+  /** Average run time of finished tasks, null when none finished. */
+  avgDurationMs: number | null;
+}
+
+export interface StatsResponse {
+  timeZone: string;
+  days: DayStats[];
+  agents: AgentStats[];
+  today: { costUsd: number; requests: number; done: number; errors: number };
+  budget: BudgetSettings;
+}
+
 export interface Snapshot {
   mode: "demo" | "live";
   agents: AgentInfo[];

@@ -1,6 +1,7 @@
 import {
   type AgentInfo,
   type AgentSettings,
+  type BudgetSettings,
   type CharacterId,
   DEFAULT_TOOL_POLICY,
   SKILL_NAME_PATTERN,
@@ -8,7 +9,7 @@ import {
   type ToolPolicy,
   emptyUsage,
 } from "@tu-ban/shared";
-import { CLAUDE_MODEL, MAX_REVIEW_ROUNDS, MAX_SUBTASKS, MAX_TREE_BUDGET_USD } from "./config.ts";
+import { CLAUDE_MODEL } from "./config.ts";
 
 /** An agent: fixed identity (id, character, desk) + settings that can be edited from the dashboard. */
 export interface AgentConfig extends AgentSettings {
@@ -176,7 +177,7 @@ export function validateSettings(id: string, s: Partial<AgentSettings>, knownSki
  * The part of the Manager's prompt generated from the current roster, so renaming or disabling
  * an agent never leaves the Manager delegating to someone who is not there.
  */
-export function managerTeamSection(configs: AgentConfig[]): string {
+export function managerTeamSection(configs: AgentConfig[], limits: BudgetSettings): string {
   const team = configs.filter((c) => c.id !== MANAGER_ID && c.enabled);
   const lines = team.length
     ? team.map((c) => `- ${c.id} (${c.name}): ${c.role || "no role set"}`).join("\n")
@@ -184,7 +185,7 @@ export function managerTeamSection(configs: AgentConfig[]): string {
   return `Your team (use these ids with the team tools):
 ${lines}
 
-Limits per request: at most ${MAX_SUBTASKS} sub-tasks, ${MAX_REVIEW_ROUNDS} reviews and $${MAX_TREE_BUDGET_USD} for the whole team.
+Limits per request: at most ${limits.maxSubtasks} sub-tasks, ${limits.maxReviewRounds} reviews and $${limits.maxRequestUsd} for the whole team.
 A tool call fails when a limit or the budget is reached; then summarise what the team has done so far.`;
 }
 

@@ -57,3 +57,6 @@ export const PUBLIC_URL = (env.PUBLIC_URL ?? `http://localhost:${PORT}`).replace
 
 /** Send the session cookie over HTTPS only. On by default when PUBLIC_URL is https. */
 export const COOKIE_SECURE = env.COOKIE_SECURE ? env.COOKIE_SECURE === "1" : PUBLIC_URL.startsWith("https://");
+
+/** Default ceiling for all spending in one day, in USD (0 = no daily limit). Editable in the dashboard. */
+export const DAILY_BUDGET_USD = Number(env.DAILY_BUDGET_USD ?? 0);

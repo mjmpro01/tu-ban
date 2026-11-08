@@ -4,6 +4,7 @@ import { createGame } from "./game/OfficeScene";
 import { AgentSettingsDialog } from "./AgentSettings";
 import { LoginScreen, PasswordDialog, UserMenu, UsersDialog } from "./Auth";
 import { HistoryDialog } from "./History";
+import { StatsDialog } from "./Stats";
 import { actions, auth, store, useStore } from "./store";
 import { PROVIDER_LABEL, Portrait, STATUS_LABEL, TASK_LABEL, TimelineItem, fmtCost, fmtTime, fmtTokens } from "./ui";
 
@@ -33,6 +34,7 @@ function Office() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [usersOpen, setUsersOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
   return (
     <div className="app">
       <main className="office">
@@ -45,6 +47,7 @@ function Office() {
           onOpenSettings={() => setSettingsOpen(true)}
           onOpenUsers={() => setUsersOpen(true)}
           onOpenPassword={() => setPasswordOpen(true)}
+          onOpenStats={() => setStatsOpen(true)}
         />
         <Composer />
         <Approvals />
@@ -55,6 +58,7 @@ function Office() {
       <AgentSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <UsersDialog open={usersOpen} onClose={() => setUsersOpen(false)} />
       <PasswordDialog open={passwordOpen} onClose={() => setPasswordOpen(false)} />
+      <StatsDialog open={statsOpen} onClose={() => setStatsOpen(false)} />
     </div>
   );
 }
@@ -68,7 +72,13 @@ function GameView() {
   return <div className="game" ref={ref} />;
 }
 
-function Header(props: { onOpenHistory: () => void; onOpenSettings: () => void; onOpenUsers: () => void; onOpenPassword: () => void }) {
+function Header(props: {
+  onOpenHistory: () => void;
+  onOpenSettings: () => void;
+  onOpenUsers: () => void;
+  onOpenPassword: () => void;
+  onOpenStats: () => void;
+}) {
   const { onOpenHistory, onOpenSettings } = props;
   const isAdmin = useStore((s) => s.auth?.user?.role === "admin");
   const connected = useStore((s) => s.connected);
@@ -90,6 +100,9 @@ function Header(props: { onOpenHistory: () => void; onOpenSettings: () => void; 
         <h1>Văn phòng AI</h1>
         <button type="button" className="secondary small" onClick={onOpenHistory}>
           Lịch sử
+        </button>
+        <button type="button" className="secondary small" onClick={props.onOpenStats}>
+          Thống kê
         </button>
         {isAdmin && (
           <button type="button" className="secondary small" onClick={onOpenSettings}>

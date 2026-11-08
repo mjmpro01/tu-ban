@@ -24,7 +24,8 @@ import {
   toAgentInfo,
   validateSettings,
 } from "./agents.ts";
-import { MAX_REVIEW_ROUNDS, MAX_SUBTASKS, MAX_TREE_BUDGET_USD, MODE, WORKDIR } from "./config.ts";
+import type { Budget } from "./budget.ts";
+import { MODE, WORKDIR } from "./config.ts";
 import { claudeProvider } from "./providers/claude.ts";
 import { copilotProvider } from "./providers/copilot.ts";
 import { cursorProvider } from "./providers/cursor.ts";
@@ -78,7 +79,10 @@ export class Orchestrator {
   private taskWaiters = new Map<string, ((t: Task) => void)[]>();
   private idleTimers = new Map<string, NodeJS.Timeout>();
 
-  constructor(private store: Store) {}
+  constructor(
+    private store: Store,
+    private budget: Budget,
+  ) {}
 
   async init() {
     const overrides = (await this.store.db?.loadAgentSettings()) ?? {};
@@ -127,7 +131,7 @@ export class Orchestrator {
         desk: c.desk,
         defaults,
         isDefault: SETTINGS_KEYS.every((k) => sameValue(current[k], defaults[k])),
-        generatedPrompt: c.id === MANAGER_ID ? managerTeamSection(all) : undefined,
+        generatedPrompt: c.id === MANAGER_ID ? managerTeamSection(all, this.budget.settings) : undefined,
         required: c.id === MANAGER_ID,
         runtimeNote: this.runtimeNotes.get(c.id),
       };
@@ -322,11 +326,13 @@ export class Orchestrator {
     });
     const checkLimits = () => {
       if (signal.aborted) throw new Error("Request was cancelled");
+      const limits = this.budget.settings;
       const subtasks = this.treeTasks(root).length - 1;
-      if (subtasks >= MAX_SUBTASKS) throw new Error(`Limit reached: at most ${MAX_SUBTASKS} sub-tasks per request`);
+      if (subtasks >= limits.maxSubtasks) throw new Error(`Limit reached: at most ${limits.maxSubtasks} sub-tasks per request`);
       const cost = this.treeCost(root);
-      if (cost >= MAX_TREE_BUDGET_USD)
-        throw new Error(`Budget reached: $${cost.toFixed(2)} of $${MAX_TREE_BUDGET_USD} spent on this request`);
+      if (cost >= limits.maxRequestUsd)
+        throw new Error(`Budget reached: $${cost.toFixed(2)} of $${limits.maxRequestUsd} spent on this request`);
+      if (this.budget.remainingToday < 0.01) throw new Error("Daily budget reached: no new work can start today");
     };
     const contextBlock = (ids: string[] = []) =>
       ids
@@ -402,7 +408,8 @@ export class Orchestrator {
         const target = this.store.tasks.get(taskId);
         if (!target || this.rootOf(target).id !== root.id) throw new Error(`Task ${taskId} is not part of this request`);
         const rounds = this.treeTasks(root).filter((t) => t.kind === "review").length;
-        if (rounds >= MAX_REVIEW_ROUNDS) throw new Error(`Limit reached: at most ${MAX_REVIEW_ROUNDS} reviews per request`);
+        const maxReviews = this.budget.settings.maxReviewRounds;
+        if (rounds >= maxReviews) throw new Error(`Limit reached: at most ${maxReviews} reviews per request`);
         await this.waitTask(taskId);
         const reviewer = [...REVIEWERS, ...this.configs.keys()].find(
           (id) => id !== MANAGER_ID && id !== target.agentId && this.configs.get(id)?.enabled,
@@ -492,6 +499,17 @@ export class Orchestrator {
       const skills = (await Promise.all(config.skills.map(async (n) => ((await skillExists(n)) ? n : undefined)))).filter(
         (n): n is string => !!n,
       );
+      // daily budget: nothing new starts once it is used up, and a run may spend at most what is left
+      await this.budget.refresh();
+      const remaining = this.budget.remainingToday;
+      if (remaining < 0.01) {
+        const b = this.budget.settings;
+        throw new Error(`Đã hết ngân sách trong ngày ($${this.budget.spentToday.toFixed(2)} / $${b.dailyUsd}). Admin có thể nâng hạn mức trong Thống kê & ngân sách.`);
+      }
+      const limits = {
+        maxBudgetUsd: Math.min(this.budget.settings.maxTaskUsd, remaining),
+        maxTurns: this.budget.settings.maxTurns,
+      };
       const toolMode = (tool: string) => {
         const group = toolGroupOf(tool);
         return group ? config.tools[group] : "ask";
@@ -501,7 +519,10 @@ export class Orchestrator {
         agent,
         skills,
         toolMode,
-        config: team ? { ...config, systemPrompt: `${config.systemPrompt}\n\n${managerTeamSection([...this.configs.values()])}` } : config,
+        limits,
+        config: team
+          ? { ...config, systemPrompt: `${config.systemPrompt}\n\n${managerTeamSection([...this.configs.values()], this.budget.settings)}` }
+          : config,
         workdir: WORKDIR,
         signal: controller.signal,
         emit,
@@ -537,6 +558,7 @@ export class Orchestrator {
       // a cancelled request also stops the work it delegated
       if (cancelled) for (const child of this.children(taskId)) if (!FINISHED(child)) this.cancel(child.id);
     } finally {
+      void this.budget.refresh().catch(() => {});
       this.running.delete(agent.id);
       this.store.patchAgent(agent.id, { currentTaskId: undefined });
 
