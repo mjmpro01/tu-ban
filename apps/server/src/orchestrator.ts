@@ -6,6 +6,7 @@ import {
   type AgentSettings,
   type CreateTaskInput,
   type ProviderId,
+  type MemoryScope,
   type Task,
   type TaskKind,
   type Usage,
@@ -24,7 +25,9 @@ import {
   toAgentInfo,
   validateSettings,
 } from "./agents.ts";
-import { MAX_REVIEW_ROUNDS, MAX_SUBTASKS, MAX_TREE_BUDGET_USD, MODE, WORKDIR } from "./config.ts";
+import type { Budget } from "./budget.ts";
+import { type Memory, recallSection } from "./memory.ts";
+import { MODE, WORKDIR } from "./config.ts";
 import { claudeProvider } from "./providers/claude.ts";
 import { copilotProvider } from "./providers/copilot.ts";
 import { cursorProvider } from "./providers/cursor.ts";
@@ -38,6 +41,12 @@ const PROVIDERS: Record<ProviderId, AgentProvider> = {
   copilot: copilotProvider,
   mock: mockProvider,
 };
+
+/** The person behind an action (from the login session). */
+export interface Actor {
+  id: string;
+  name: string;
+}
 
 /** Who reviews, in order of preference (the first enabled agent that did not do the work). */
 const REVIEWERS = ["researcher", "writer"];
@@ -72,7 +81,11 @@ export class Orchestrator {
   private taskWaiters = new Map<string, ((t: Task) => void)[]>();
   private idleTimers = new Map<string, NodeJS.Timeout>();
 
-  constructor(private store: Store) {}
+  constructor(
+    private store: Store,
+    private budget: Budget,
+    private memory?: Memory,
+  ) {}
 
   async init() {
     const overrides = (await this.store.db?.loadAgentSettings()) ?? {};
@@ -121,7 +134,7 @@ export class Orchestrator {
         desk: c.desk,
         defaults,
         isDefault: SETTINGS_KEYS.every((k) => sameValue(current[k], defaults[k])),
-        generatedPrompt: c.id === MANAGER_ID ? managerTeamSection(all) : undefined,
+        generatedPrompt: c.id === MANAGER_ID ? managerTeamSection(all, this.budget.settings) : undefined,
         required: c.id === MANAGER_ID,
         runtimeNote: this.runtimeNotes.get(c.id),
       };
@@ -129,7 +142,7 @@ export class Orchestrator {
   }
 
   /** Apply an edit from the dashboard. Running tasks keep the old settings; the next task uses the new ones. */
-  async updateAgentSettings(id: string, patch: Partial<AgentSettings>): Promise<AgentConfigView> {
+  async updateAgentSettings(id: string, patch: Partial<AgentSettings>, actor?: Actor): Promise<AgentConfigView> {
     const current = this.configs.get(id);
     if (!current) throw new Error(`Không có agent "${id}"`);
     const known = new Set((await listSkills(() => [])).map((sk) => sk.name));
@@ -162,7 +175,8 @@ export class Orchestrator {
       agentId: id,
       type: "config",
       activity: busy ? this.agent(id).activity : "idle",
-      summary: `Cập nhật cấu hình: ${changed.map((k) => SETTING_LABELS[k]).join(", ")}${busy ? " (áp dụng từ task sau)" : ""}`,
+      summary: `${actor ? `${actor.name} cập nhật` : "Cập nhật"} cấu hình: ${changed.map((k) => SETTING_LABELS[k]).join(", ")}${busy ? " (áp dụng từ task sau)" : ""}`,
+      actor: actor?.name,
     });
     return this.agentConfigs().find((c) => c.id === id)!;
   }
@@ -173,29 +187,37 @@ export class Orchestrator {
   }
 
   /** After a skill is deleted from the library, take it off every agent. */
-  async forgetSkill(name: string) {
+  async forgetSkill(name: string, actor?: Actor) {
     for (const id of this.skillUsers(name)) {
       const c = this.configs.get(id)!;
-      await this.updateAgentSettings(id, { skills: c.skills.filter((s) => s !== name) });
+      await this.updateAgentSettings(id, { skills: c.skills.filter((s) => s !== name) }, actor);
     }
   }
 
-  resetAgentSettings(id: string) {
+  resetAgentSettings(id: string, actor?: Actor) {
     const defaults = ROSTER.find((r) => r.id === id);
     if (!defaults) throw new Error(`Không có agent "${id}"`);
-    return this.updateAgentSettings(id, pickSettings(defaults));
+    return this.updateAgentSettings(id, pickSettings(defaults), actor);
   }
 
   /** A request from the user. Without an explicit agent it goes to the Manager, who plans and delegates. */
-  createTask(input: CreateTaskInput): Task {
+  createTask(input: CreateTaskInput, actor?: Actor): Task {
     const prompt = input.prompt.trim();
     if (!prompt) throw new Error("Nội dung task trống");
     const agentId = input.agentId && this.configs.has(input.agentId) ? input.agentId : MANAGER_ID;
     if (!this.configs.get(agentId)!.enabled) throw new Error(`${this.configs.get(agentId)!.name} đang tắt`);
-    return this.enqueue({ agentId, prompt, title: clip(prompt, 60), kind: "task" });
+    return this.enqueue({ agentId, prompt, title: clip(prompt, 60), kind: "task", createdBy: actor });
   }
 
-  private enqueue(p: { agentId: string; prompt: string; title: string; kind: TaskKind; parentId?: string }): Task {
+  private enqueue(p: {
+    agentId: string;
+    prompt: string;
+    title: string;
+    kind: TaskKind;
+    parentId?: string;
+    createdBy?: Actor;
+    followUpOf?: string;
+  }): Task {
     const task: Task = {
       id: randomUUID(),
       title: p.title,
@@ -203,6 +225,9 @@ export class Orchestrator {
       agentId: p.agentId,
       parentId: p.parentId,
       kind: p.kind,
+      createdBy: p.createdBy?.name,
+      createdById: p.createdBy?.id,
+      followUpOf: p.followUpOf,
       status: "queued",
       createdAt: Date.now(),
       usage: emptyUsage(),
@@ -213,10 +238,83 @@ export class Orchestrator {
     return task;
   }
 
+  /**
+   * Move a task that has not started yet to another agent's queue (kept in creation order).
+   * A Manager sub-task cannot go to the Manager: it is busy waiting for that very sub-task.
+   */
+  reassign(taskId: string, agentId: string, actor?: Actor): Task {
+    const task = this.store.tasks.get(taskId);
+    if (!task) throw new Error("Không có task này");
+    if (task.status !== "queued") throw new Error("Chỉ chuyển được task đang chờ trong hàng đợi");
+    const target = this.configs.get(agentId);
+    if (!target) throw new Error(`Không có agent "${agentId}"`);
+    if (!target.enabled) throw new Error(`${target.name} đang tắt`);
+    if (agentId === task.agentId) return task;
+    if (task.parentId && agentId === MANAGER_ID) throw new Error("Không chuyển việc con cho Manager: Manager đang chờ chính việc này");
+    const from = this.queues.get(task.agentId)!;
+    const i = from.indexOf(taskId);
+    if (i >= 0) from.splice(i, 1);
+    const to = this.queues.get(agentId)!;
+    const at = to.findIndex((id) => (this.store.tasks.get(id)?.createdAt ?? 0) > task.createdAt);
+    to.splice(at < 0 ? to.length : at, 0, taskId);
+    const previous = this.store.agents.get(task.agentId)?.name ?? task.agentId;
+    this.store.patchTask(taskId, { agentId });
+    this.store.addEvent({
+      agentId: task.agentId,
+      taskId,
+      type: "handoff",
+      activity: "handoff",
+      targetAgentId: agentId,
+      summary: `${actor ? `${actor.name} chuyển` : "Chuyển"} "${task.title}" từ ${previous} sang ${target.name}`,
+      actor: actor?.name,
+    });
+    this.pump(agentId);
+    return this.store.tasks.get(taskId)!;
+  }
+
+  /** Start a new request for another agent that continues a finished task, with its result as context. */
+  handoff(fromTaskId: string, input: { agentId?: string; instructions?: string }, actor?: Actor): Task {
+    const from = this.store.tasks.get(fromTaskId);
+    if (!from) throw new Error("Không có task này");
+    if (from.status !== "done") throw new Error("Chỉ bàn giao tiếp được task đã xong");
+    const target = input.agentId ? this.configs.get(input.agentId) : undefined;
+    if (!target) throw new Error("Chọn agent nhận việc");
+    if (!target.enabled) throw new Error(`${target.name} đang tắt`);
+    const instructions = String(input.instructions ?? "").trim();
+    if (!instructions) throw new Error("Nhập việc cần làm tiếp");
+    const fromName = this.store.agents.get(from.agentId)?.name ?? from.agentId;
+    const prompt = [
+      instructions,
+      `## Bối cảnh: kết quả trước đó của ${fromName} (task "${from.title}")`,
+      clip(from.result ?? "", 8000),
+      "File tạo ra hãy lưu trong thư mục làm việc chung và nêu đường dẫn trong câu trả lời.",
+    ].join("\n\n");
+    const task = this.enqueue({
+      agentId: target.id,
+      prompt,
+      title: clip(instructions, 60),
+      kind: "task",
+      createdBy: actor,
+      followUpOf: from.id,
+    });
+    this.store.addEvent({
+      agentId: from.agentId,
+      taskId: task.id,
+      type: "handoff",
+      activity: "handoff",
+      targetAgentId: target.id,
+      summary: `${actor ? `${actor.name}: ` : ""}${fromName} bàn giao cho ${target.name}: ${task.title}`,
+      actor: actor?.name,
+    });
+    return task;
+  }
+
   /** Cancel a task and everything it delegated. */
-  cancel(taskId: string) {
+  cancel(taskId: string, actor?: Actor) {
     const task = this.store.tasks.get(taskId);
     if (!task) return;
+    if (actor && !task.parentId && !FINISHED(task))
+      this.store.addEvent({ agentId: task.agentId, taskId, type: "error", activity: "idle", summary: `${actor.name} huỷ: ${task.title}`, actor: actor.name });
     for (const child of this.children(taskId)) if (!FINISHED(child)) this.cancel(child.id);
     if (task.status === "queued") {
       const q = this.queues.get(task.agentId)!;
@@ -229,19 +327,20 @@ export class Orchestrator {
     }
   }
 
-  decide(approvalId: string, approve: boolean) {
+  decide(approvalId: string, approve: boolean, actor?: Actor) {
     const a = this.store.approvals.get(approvalId);
     const waiter = this.approvalWaiters.get(approvalId);
     if (!a || a.status !== "pending" || !waiter) return;
     this.approvalWaiters.delete(approvalId);
-    this.store.setApproval({ ...a, status: approve ? "approved" : "denied" });
+    this.store.setApproval({ ...a, status: approve ? "approved" : "denied", decidedBy: actor?.name });
     this.store.addEvent({
       agentId: a.agentId,
       taskId: a.taskId,
       type: "approval_resolved",
       activity: approve ? "code" : "thinking",
       tool: a.tool,
-      summary: `${approve ? "Đã duyệt" : "Từ chối"}: ${a.summary}`,
+      summary: `${approve ? "Đã duyệt" : "Từ chối"}${actor ? ` (${actor.name})` : ""}: ${a.summary}`,
+      actor: actor?.name,
     });
     waiter(approve);
   }
@@ -303,11 +402,13 @@ export class Orchestrator {
     });
     const checkLimits = () => {
       if (signal.aborted) throw new Error("Request was cancelled");
+      const limits = this.budget.settings;
       const subtasks = this.treeTasks(root).length - 1;
-      if (subtasks >= MAX_SUBTASKS) throw new Error(`Limit reached: at most ${MAX_SUBTASKS} sub-tasks per request`);
+      if (subtasks >= limits.maxSubtasks) throw new Error(`Limit reached: at most ${limits.maxSubtasks} sub-tasks per request`);
       const cost = this.treeCost(root);
-      if (cost >= MAX_TREE_BUDGET_USD)
-        throw new Error(`Budget reached: $${cost.toFixed(2)} of $${MAX_TREE_BUDGET_USD} spent on this request`);
+      if (cost >= limits.maxRequestUsd)
+        throw new Error(`Budget reached: $${cost.toFixed(2)} of $${limits.maxRequestUsd} spent on this request`);
+      if (this.budget.remainingToday < 0.01) throw new Error("Daily budget reached: no new work can start today");
     };
     const contextBlock = (ids: string[] = []) =>
       ids
@@ -332,7 +433,14 @@ export class Orchestrator {
       ]
         .filter(Boolean)
         .join("\n\n");
-      const task = this.enqueue({ agentId, prompt, title: clip(instructions, 60), kind, parentId: root.id });
+      const task = this.enqueue({
+        agentId,
+        prompt,
+        title: clip(instructions, 60),
+        kind,
+        parentId: root.id,
+        createdBy: root.createdById ? { id: root.createdById, name: root.createdBy ?? "" } : undefined,
+      });
       this.store.addEvent({
         agentId: MANAGER_ID,
         taskId: root.id,
@@ -376,7 +484,8 @@ export class Orchestrator {
         const target = this.store.tasks.get(taskId);
         if (!target || this.rootOf(target).id !== root.id) throw new Error(`Task ${taskId} is not part of this request`);
         const rounds = this.treeTasks(root).filter((t) => t.kind === "review").length;
-        if (rounds >= MAX_REVIEW_ROUNDS) throw new Error(`Limit reached: at most ${MAX_REVIEW_ROUNDS} reviews per request`);
+        const maxReviews = this.budget.settings.maxReviewRounds;
+        if (rounds >= maxReviews) throw new Error(`Limit reached: at most ${maxReviews} reviews per request`);
         await this.waitTask(taskId);
         const reviewer = [...REVIEWERS, ...this.configs.keys()].find(
           (id) => id !== MANAGER_ID && id !== target.agentId && this.configs.get(id)?.enabled,
@@ -398,6 +507,98 @@ export class Orchestrator {
         return { approved, feedback: text.replace(/VERDICT:.*$/im, "").trim(), reviewTaskId };
       },
     };
+  }
+
+  // ---------------------------------------------------------------- memory
+  private memoryApi(memory: Memory, agentId: string, runId: string, taskId: string, emit: (e: EmitInput) => void) {
+    const label: Record<MemoryScope, string> = { office: "chung", agent: "riêng", request: "cho cả nhóm" };
+    return {
+      search: async (query: string, scope: MemoryScope | "all" = "all", limit?: number) => {
+        const items =
+          scope === "all"
+            ? await memory.recall(query, { agentId, runId }, limit ?? 8)
+            : await memory.query({ q: query, scope, agentId: scope === "agent" ? agentId : undefined, runId, limit: limit ?? 8 });
+        emit({
+          type: "memory",
+          activity: "search",
+          tool: "memory_search",
+          summary: `Tra bộ nhớ: "${clip(query, 50)}" → ${items.length} kết quả`,
+          detail: items.map((m) => `- ${m.text}`).join("\n") || undefined,
+        });
+        return items;
+      },
+      save: async (text: string, scope: MemoryScope) => {
+        const saved = await memory.add({ text, scope, agentId, runId, createdBy: agentId, taskId });
+        emit({
+          type: "memory",
+          activity: "write",
+          tool: "memory_save",
+          summary: `Ghi nhớ (${label[scope]}): ${clip(text, 70)}`,
+          detail: text,
+        });
+        return saved;
+      },
+    };
+  }
+
+  /** Find what the office already knows about this task and hand it to the agent. */
+  private async autoRecall(task: Task, agentId: string, runId: string, emit: (e: EmitInput) => void) {
+    if (!this.memory?.settings.autoRecall || task.kind === "review") return undefined;
+    try {
+      // search with the work itself, not the wrapper text added around delegated work
+      const query = task.prompt
+        .replace(/^\[Việc do Manager giao[^\n]*\n+/, "")
+        .split(/\n## Bối cảnh/)[0];
+      const items = await this.memory.recall(clip(query, 500), { agentId, runId });
+      if (!items.length) return undefined;
+      emit({
+        type: "memory",
+        activity: "search",
+        summary: `Nhớ lại ${items.length} điều liên quan`,
+        detail: items.map((m) => `- [${m.scope}] ${m.text}`).join("\n"),
+      });
+      return recallSection(items);
+    } catch (e) {
+      console.warn(`[memory] không nhắc lại được: ${(e as Error).message}`);
+      return undefined;
+    }
+  }
+
+  /** Keep what a finished user request produced, so later requests (and other agents) can build on it. */
+  private async autoSave(task: Task, result: string) {
+    const memory = this.memory;
+    if (!memory?.settings.autoSave || !result.trim()) return;
+    try {
+      const saved = memory.canInfer
+        ? await memory.add({
+            text: result.slice(0, 4000),
+            scope: "office",
+            createdBy: "auto",
+            taskId: task.id,
+            infer: true,
+            messages: [
+              { role: "user", content: clip(task.prompt, 2000) },
+              { role: "assistant", content: result.slice(0, 6000) },
+            ],
+          })
+        : await memory.add({
+            text: `Yêu cầu "${clip(task.title, 120)}" (${new Date(task.createdAt).toISOString().slice(0, 10)}): ${clip(result, 900)}`,
+            scope: "office",
+            createdBy: "auto",
+            taskId: task.id,
+          });
+      if (saved.length)
+        this.store.addEvent({
+          agentId: task.agentId,
+          taskId: task.id,
+          type: "memory",
+          activity: "done",
+          summary: `Đã ghi ${saved.length} điều vào bộ nhớ chung`,
+          detail: saved.map((m) => `- ${m.text}`).join("\n"),
+        });
+    } catch (e) {
+      console.warn(`[memory] không tự ghi nhớ được: ${(e as Error).message}`);
+    }
   }
 
   // ---------------------------------------------------------------- running
@@ -466,16 +667,35 @@ export class Orchestrator {
       const skills = (await Promise.all(config.skills.map(async (n) => ((await skillExists(n)) ? n : undefined)))).filter(
         (n): n is string => !!n,
       );
+      // daily budget: nothing new starts once it is used up, and a run may spend at most what is left
+      await this.budget.refresh();
+      const remaining = this.budget.remainingToday;
+      if (remaining < 0.01) {
+        const b = this.budget.settings;
+        throw new Error(`Đã hết ngân sách trong ngày ($${this.budget.spentToday.toFixed(2)} / $${b.dailyUsd}). Admin có thể nâng hạn mức trong Thống kê & ngân sách.`);
+      }
+      const limits = {
+        maxBudgetUsd: Math.min(this.budget.settings.maxTaskUsd, remaining),
+        maxTurns: this.budget.settings.maxTurns,
+      };
       const toolMode = (tool: string) => {
         const group = toolGroupOf(tool);
         return group ? config.tools[group] : "ask";
       };
+      const runId = this.rootOf(task).id;
+      const memory = this.memory ? this.memoryApi(this.memory, agent.id, runId, taskId, emit) : undefined;
+      const memoryContext = await this.autoRecall(task, agent.id, runId, emit);
       const { result, usage } = await provider.run({
         task,
         agent,
+        memory,
+        memoryContext,
         skills,
         toolMode,
-        config: team ? { ...config, systemPrompt: `${config.systemPrompt}\n\n${managerTeamSection([...this.configs.values()])}` } : config,
+        limits,
+        config: team
+          ? { ...config, systemPrompt: `${config.systemPrompt}\n\n${managerTeamSection([...this.configs.values()], this.budget.settings)}` }
+          : config,
         workdir: WORKDIR,
         signal: controller.signal,
         emit,
@@ -488,6 +708,7 @@ export class Orchestrator {
       this.finish(taskId, { status: "done", finishedAt: Date.now(), result, usage: usage ?? emptyUsage() });
       this.store.patchAgent(agent.id, { status: "idle", activity: "done", summary: "Xong việc!", usage: addUsage(a.usage, usage) });
       this.store.addEvent({ agentId: agent.id, taskId, type: "done", activity: "done", summary: `Xong: ${task.title}`, detail: result, usage });
+      if (!task.parentId && task.kind === "task") void this.autoSave(task, result);
     } catch (err) {
       const cancelled = controller.signal.aborted;
       const message = err instanceof Error ? err.message : String(err);
@@ -511,6 +732,7 @@ export class Orchestrator {
       // a cancelled request also stops the work it delegated
       if (cancelled) for (const child of this.children(taskId)) if (!FINISHED(child)) this.cancel(child.id);
     } finally {
+      void this.budget.refresh().catch(() => {});
       this.running.delete(agent.id);
       this.store.patchAgent(agent.id, { currentTaskId: undefined });
 

@@ -10,6 +10,7 @@ import {
   sameValue,
 } from "@tu-ban/shared";
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { api } from "./api";
 import { useStore } from "./store";
 import { Portrait } from "./ui";
 
@@ -21,16 +22,7 @@ const PROVIDERS: { value: AgentSettings["provider"]; label: string }[] = [
 const KNOWN_MODELS: readonly string[] = CLAUDE_MODELS.map((m) => m.id);
 const CUSTOM = "__custom__";
 
-async function send<T>(method: string, url: string, body?: unknown): Promise<T> {
-  const res = await fetch(url, {
-    method,
-    headers: body ? { "content-type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
-  return data as T;
-}
+const send = <T,>(method: string, url: string, body?: unknown) => api<T>(method, url, body);
 
 const settingsOf = (c: AgentConfigView): AgentSettings => ({
   name: c.name,

@@ -2,12 +2,16 @@ import {
   ACTIVE_STATUSES,
   type AgentEvent,
   type AgentSettings,
+  type AgentStats,
+  type DayStats,
+  type MemoryItem,
   type Approval,
   type Task,
   type TaskQuery,
   type Usage,
 } from "@tu-ban/shared";
 import pg from "pg";
+import type { AuthRepo, StoredUser } from "./auth.ts";
 
 /** What the store needs from a database. The office runs without one (in-memory only). */
 export interface Persistence {
@@ -22,6 +26,14 @@ export interface Persistence {
   loadAgentSettings(): Promise<Record<string, Partial<AgentSettings>>>;
   saveAgentSettings(agentId: string, settings: Partial<AgentSettings>): Promise<void>;
   deleteAgentSettings(agentId: string): Promise<void>;
+  loadSetting<T>(key: string): Promise<T | undefined>;
+  saveSetting(key: string, value: unknown): Promise<void>;
+  loadMemories(limit: number): Promise<MemoryItem[]>;
+  saveMemory(m: MemoryItem): Promise<void>;
+  deleteMemory(id: string): Promise<void>;
+  /** Spending since `since` (ms), all tasks. */
+  spentSince(since: number): Promise<number>;
+  stats(days: number, timeZone: string): Promise<{ days: DayStats[]; agents: AgentStats[] }>;
   listTasks(query: TaskQuery & { limit: number }): Promise<Task[]>;
   /** Wait for queued writes, then close the pool. */
   close(): Promise<void>;
@@ -111,6 +123,53 @@ const MIGRATIONS: string[] = [
     updated_at  timestamptz NOT NULL DEFAULT now()
   );
   `,
+  `
+  CREATE TABLE users (
+    id            uuid PRIMARY KEY,
+    username      text NOT NULL UNIQUE,
+    display_name  text NOT NULL,
+    password_hash text NOT NULL,
+    role          text NOT NULL,
+    disabled      boolean NOT NULL DEFAULT false,
+    created_at    timestamptz NOT NULL DEFAULT now()
+  );
+  CREATE TABLE sessions (
+    id          text PRIMARY KEY,
+    user_id     uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    expires_at  timestamptz NOT NULL
+  );
+  CREATE INDEX sessions_user_idx ON sessions (user_id);
+  ALTER TABLE tasks ADD COLUMN created_by text;
+  ALTER TABLE tasks ADD COLUMN created_by_id uuid;
+  ALTER TABLE approvals ADD COLUMN decided_by text;
+  ALTER TABLE events ADD COLUMN actor text;
+  `,
+  `
+  CREATE TABLE app_settings (
+    key         text PRIMARY KEY,
+    value       jsonb NOT NULL,
+    updated_at  timestamptz NOT NULL DEFAULT now()
+  );
+  `,
+  `
+  ALTER TABLE tasks ADD COLUMN follow_up_of uuid;
+  `,
+  `
+  -- shared memory when no Mem0 server is configured (keyword search)
+  CREATE TABLE memories (
+    id          uuid PRIMARY KEY,
+    text        text NOT NULL,
+    scope       text NOT NULL,
+    agent_id    text,
+    run_id      text,
+    created_by  text,
+    task_id     uuid,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now()
+  );
+  CREATE INDEX memories_scope_idx ON memories (scope, agent_id, run_id);
+  `,
 ];
 
 const ms = (d: Date | null | undefined) => (d ? d.getTime() : undefined);
@@ -126,6 +185,9 @@ const toTask = (r: Row): Task => ({
   agentId: r.agent_id,
   parentId: r.parent_id ?? undefined,
   kind: r.kind ?? "task",
+  createdBy: r.created_by ?? undefined,
+  createdById: r.created_by_id ?? undefined,
+  followUpOf: r.follow_up_of ?? undefined,
   status: r.status,
   createdAt: ms(r.created_at)!,
   startedAt: ms(r.started_at),
@@ -147,6 +209,7 @@ const toEvent = (r: Row): AgentEvent => ({
   detail: r.detail ?? undefined,
   targetAgentId: r.target_agent_id ?? undefined,
   participants: r.participants ?? undefined,
+  actor: r.actor ?? undefined,
   usage:
     r.tokens_in === null ? undefined : { tokensIn: num(r.tokens_in), tokensOut: num(r.tokens_out), costUsd: num(r.cost_usd) },
 });
@@ -160,9 +223,32 @@ const toApproval = (r: Row): Approval => ({
   input: r.input,
   status: r.status,
   createdAt: ms(r.created_at)!,
+  decidedBy: r.decided_by ?? undefined,
 });
 
-export class PgPersistence implements Persistence {
+const toMemory = (r: Row): MemoryItem => ({
+  id: r.id,
+  text: r.text,
+  scope: r.scope,
+  agentId: r.agent_id ?? undefined,
+  runId: r.run_id ?? undefined,
+  createdBy: r.created_by ?? undefined,
+  taskId: r.task_id ?? undefined,
+  createdAt: ms(r.created_at),
+  updatedAt: ms(r.updated_at),
+});
+
+const toUser = (r: Row): StoredUser => ({
+  id: r.id,
+  username: r.username,
+  displayName: r.display_name,
+  role: r.role,
+  disabled: r.disabled,
+  createdAt: ms(r.created_at)!,
+  passwordHash: r.password_hash,
+});
+
+export class PgPersistence implements Persistence, AuthRepo {
   private pool: pg.Pool;
   /** Writes are queued and run one after another so the database sees them in order. */
   private queue: Promise<unknown> = Promise.resolve();
@@ -234,38 +320,40 @@ export class PgPersistence implements Persistence {
 
   saveTask(t: Task) {
     this.write(
-      `INSERT INTO tasks (id, title, prompt, agent_id, parent_id, status, created_at, started_at, finished_at, result, error, tokens_in, tokens_out, cost_usd, kind)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+      `INSERT INTO tasks (id, title, prompt, agent_id, parent_id, status, created_at, started_at, finished_at, result, error, tokens_in, tokens_out, cost_usd, kind, created_by, created_by_id, follow_up_of)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
        ON CONFLICT (id) DO UPDATE SET
+         agent_id = EXCLUDED.agent_id,
          status = EXCLUDED.status, started_at = EXCLUDED.started_at, finished_at = EXCLUDED.finished_at,
          result = EXCLUDED.result, error = EXCLUDED.error,
          tokens_in = EXCLUDED.tokens_in, tokens_out = EXCLUDED.tokens_out, cost_usd = EXCLUDED.cost_usd`,
       [
         t.id, t.title, t.prompt, t.agentId, t.parentId ?? null, t.status, date(t.createdAt), date(t.startedAt), date(t.finishedAt),
         t.result ?? null, t.error ?? null, t.usage.tokensIn, t.usage.tokensOut, t.usage.costUsd, t.kind,
+        t.createdBy ?? null, t.createdById ?? null, t.followUpOf ?? null,
       ],
     );
   }
 
   saveEvent(e: AgentEvent) {
     this.write(
-      `INSERT INTO events (id, ts, agent_id, task_id, type, activity, summary, tool, detail, target_agent_id, tokens_in, tokens_out, cost_usd, participants)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (id) DO NOTHING`,
+      `INSERT INTO events (id, ts, agent_id, task_id, type, activity, summary, tool, detail, target_agent_id, tokens_in, tokens_out, cost_usd, participants, actor)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT (id) DO NOTHING`,
       [
         e.id, date(e.ts), e.agentId, e.taskId ?? null, e.type, e.activity, e.summary, e.tool ?? null, e.detail ?? null,
         e.targetAgentId ?? null, e.usage?.tokensIn ?? null, e.usage?.tokensOut ?? null, e.usage?.costUsd ?? null,
-        e.participants ?? null,
+        e.participants ?? null, e.actor ?? null,
       ],
     );
   }
 
   saveApproval(a: Approval) {
     this.write(
-      `INSERT INTO approvals (id, agent_id, task_id, tool, summary, input, status, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-       ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status,
+      `INSERT INTO approvals (id, agent_id, task_id, tool, summary, input, status, created_at, decided_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, decided_by = EXCLUDED.decided_by,
          decided_at = CASE WHEN EXCLUDED.status <> 'pending' THEN now() ELSE approvals.decided_at END`,
-      [a.id, a.agentId, a.taskId, a.tool, a.summary, a.input, a.status, date(a.createdAt)],
+      [a.id, a.agentId, a.taskId, a.tool, a.summary, a.input, a.status, date(a.createdAt), a.decidedBy ?? null],
     );
   }
 
@@ -284,6 +372,92 @@ export class PgPersistence implements Persistence {
     if (!/^[0-9a-f-]{36}$/i.test(taskId)) return [];
     const { rows } = await this.pool.query(`SELECT * FROM events WHERE task_id = $1 ORDER BY ts`, [taskId]);
     return rows.map(toEvent);
+  }
+
+  async loadSetting<T>(key: string) {
+    const { rows } = await this.pool.query(`SELECT value FROM app_settings WHERE key = $1`, [key]);
+    return rows[0]?.value as T | undefined;
+  }
+
+  async saveSetting(key: string, value: unknown) {
+    await this.pool.query(
+      `INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [key, JSON.stringify(value)],
+    );
+  }
+
+  async loadMemories(limit: number) {
+    const { rows } = await this.pool.query(`SELECT * FROM memories ORDER BY updated_at DESC LIMIT $1`, [limit]);
+    return rows.map(toMemory);
+  }
+
+  async saveMemory(m: MemoryItem) {
+    await this.pool.query(
+      `INSERT INTO memories (id, text, scope, agent_id, run_id, created_by, task_id, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (id) DO UPDATE SET text = EXCLUDED.text, updated_at = EXCLUDED.updated_at`,
+      [m.id, m.text, m.scope, m.agentId ?? null, m.runId ?? null, m.createdBy ?? null, m.taskId ?? null, date(m.createdAt), date(m.updatedAt)],
+    );
+  }
+
+  async deleteMemory(id: string) {
+    await this.pool.query(`DELETE FROM memories WHERE id = $1`, [id]);
+  }
+
+  async spentSince(since: number) {
+    await this.queue;
+    const { rows } = await this.pool.query(`SELECT coalesce(sum(cost_usd), 0) AS c FROM tasks WHERE created_at >= $1`, [date(since)]);
+    return num(rows[0].c);
+  }
+
+  async stats(days: number, timeZone: string) {
+    await this.queue;
+    const daily = await this.pool.query(
+      `SELECT to_char(date_trunc('day', created_at AT TIME ZONE $2), 'YYYY-MM-DD') AS day,
+              count(*) FILTER (WHERE parent_id IS NULL)::int AS requests,
+              count(*) FILTER (WHERE parent_id IS NULL AND status = 'done')::int AS done,
+              count(*) FILTER (WHERE parent_id IS NULL AND status = 'error')::int AS errors,
+              coalesce(sum(cost_usd), 0) AS cost,
+              coalesce(sum(tokens_in + tokens_out), 0) AS tokens
+         FROM tasks
+        WHERE created_at >= (date_trunc('day', now() AT TIME ZONE $2) - make_interval(days => $1 - 1)) AT TIME ZONE $2
+        GROUP BY 1`,
+      [days, timeZone],
+    );
+    const perAgent = await this.pool.query(
+      `SELECT agent_id,
+              count(*)::int AS tasks,
+              count(*) FILTER (WHERE status = 'done')::int AS done,
+              count(*) FILTER (WHERE status = 'error')::int AS errors,
+              coalesce(sum(cost_usd), 0) AS cost,
+              coalesce(sum(tokens_in + tokens_out), 0) AS tokens,
+              avg(extract(epoch FROM finished_at - started_at) * 1000)
+                FILTER (WHERE status = 'done' AND started_at IS NOT NULL AND finished_at IS NOT NULL) AS avg_ms
+         FROM tasks
+        WHERE created_at >= (date_trunc('day', now() AT TIME ZONE $2) - make_interval(days => $1 - 1)) AT TIME ZONE $2
+        GROUP BY agent_id`,
+      [days, timeZone],
+    );
+    return {
+      days: daily.rows.map((r) => ({
+        date: r.day as string,
+        requests: r.requests as number,
+        done: r.done as number,
+        errors: r.errors as number,
+        costUsd: num(r.cost),
+        tokens: num(r.tokens),
+      })),
+      agents: perAgent.rows.map((r) => ({
+        agentId: r.agent_id as string,
+        tasks: r.tasks as number,
+        done: r.done as number,
+        errors: r.errors as number,
+        costUsd: num(r.cost),
+        tokens: num(r.tokens),
+        avgDurationMs: r.avg_ms === null ? null : Number(r.avg_ms),
+      })),
+    };
   }
 
   async loadAgentSettings() {
@@ -330,6 +504,60 @@ export class PgPersistence implements Persistence {
       [limit, date(before), agentId ?? null, statuses, pattern, parentId && /^[0-9a-f-]{36}$/i.test(parentId) ? parentId : null, !!rootsOnly],
     );
     return rows.map(toTask);
+  }
+
+  // ---------------------------------------------------------------- users & sessions (AuthRepo)
+  async countUsers() {
+    const { rows } = await this.pool.query(`SELECT count(*)::int AS n FROM users`);
+    return rows[0].n as number;
+  }
+  async listUsers() {
+    const { rows } = await this.pool.query(`SELECT * FROM users ORDER BY created_at`);
+    return rows.map(toUser);
+  }
+  async findUser(by: { id?: string; username?: string }) {
+    const { rows } = by.id
+      ? await this.pool.query(`SELECT * FROM users WHERE id = $1`, [by.id])
+      : await this.pool.query(`SELECT * FROM users WHERE lower(username) = lower($1)`, [by.username]);
+    return rows[0] ? toUser(rows[0]) : undefined;
+  }
+  async insertUser(u: StoredUser) {
+    await this.pool.query(
+      `INSERT INTO users (id, username, display_name, password_hash, role, disabled, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [u.id, u.username, u.displayName, u.passwordHash, u.role, u.disabled, date(u.createdAt)],
+    );
+  }
+  async updateUser(id: string, patch: Partial<StoredUser>) {
+    // fixed column list: only these fields can be changed
+    const cols: [string, unknown][] = [
+      ["display_name", patch.displayName],
+      ["password_hash", patch.passwordHash],
+      ["role", patch.role],
+      ["disabled", patch.disabled],
+    ];
+    const set = cols.filter(([, v]) => v !== undefined);
+    if (!set.length) return;
+    const assignments = set.map(([k], i) => `${k} = $${i + 2}`).join(", ");
+    await this.pool.query(`UPDATE users SET ${assignments} WHERE id = $1`, [id, ...set.map(([, v]) => v)]);
+  }
+  async deleteUser(id: string) {
+    await this.pool.query(`DELETE FROM users WHERE id = $1`, [id]);
+  }
+  async insertSession(id: string, userId: string, expiresAt: number) {
+    await this.pool.query(`INSERT INTO sessions (id, user_id, expires_at) VALUES ($1,$2,$3)`, [id, userId, date(expiresAt)]);
+  }
+  async findSession(id: string) {
+    const { rows } = await this.pool.query(`SELECT user_id, expires_at FROM sessions WHERE id = $1`, [id]);
+    return rows[0] ? { userId: rows[0].user_id as string, expiresAt: ms(rows[0].expires_at)! } : undefined;
+  }
+  async deleteSession(id: string) {
+    await this.pool.query(`DELETE FROM sessions WHERE id = $1`, [id]);
+  }
+  async deleteUserSessions(userId: string) {
+    await this.pool.query(`DELETE FROM sessions WHERE user_id = $1`, [userId]);
+  }
+  async purgeSessions() {
+    await this.pool.query(`DELETE FROM sessions WHERE expires_at < now()`);
   }
 
   async close() {

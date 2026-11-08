@@ -1,5 +1,7 @@
 import { ACTIVE_STATUSES, type AgentEvent, type Task, type TaskQuery, matchesTaskQuery } from "@tu-ban/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api } from "./api";
+import { useCanCancel } from "./App";
 import { actions, store, useStore } from "./store";
 import { Portrait, TASK_LABEL, TimelineItem, fmtCost, fmtDateTime, fmtDuration, fmtTokens } from "./ui";
 
@@ -15,11 +17,7 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "cancelled", label: TASK_LABEL.cancelled },
 ];
 
-async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json() as Promise<T>;
-}
+const getJson = <T,>(url: string) => api<T>("GET", url);
 
 function toQuery(f: Filters): TaskQuery {
   return {
@@ -178,6 +176,7 @@ function HistoryBody({ onClose }: { onClose: () => void }) {
                     </div>
                     <div className="muted">
                       {agent?.name ?? t.agentId} · {fmtDateTime(t.createdAt)}
+                      {t.createdBy && !t.parentId ? ` · ${t.createdBy}` : ""}
                       {t.startedAt && t.finishedAt ? ` · ${fmtDuration(t.finishedAt - t.startedAt)}` : ""}
                       {t.usage.costUsd > 0 ? ` · ${fmtCost(t.usage.costUsd)}` : ""}
                     </div>
@@ -287,6 +286,7 @@ function TaskDetail({
   }, [task.id]);
 
   const active = ACTIVE_STATUSES.includes(task.status);
+  const canCancel = useCanCancel(task);
   const runAgain = async () => {
     const res = await actions.createTask({ prompt: task.prompt, agentId: task.agentId });
     setRerun(res.ok ? "Đã giao lại task." : (res.error ?? "Không giao lại được"));
@@ -305,10 +305,16 @@ function TaskDetail({
           <div className="muted">
             {agent?.name ?? task.agentId}
             {task.kind === "review" && " · Review"}
+            {task.createdBy && ` · giao bởi ${task.createdBy}`}
           </div>
           {task.parentId && (
             <button type="button" className="link" onClick={() => onSelect(task.parentId!)}>
               ↑ Thuộc yêu cầu: {parent?.title ?? "xem task cha"}
+            </button>
+          )}
+          {task.followUpOf && (
+            <button type="button" className="link" onClick={() => onSelect(task.followUpOf!)}>
+              ↩ Tiếp nối từ: {live[task.followUpOf]?.title ?? "xem task trước"}
             </button>
           )}
         </div>
@@ -340,7 +346,7 @@ function TaskDetail({
         <button type="button" className="secondary" onClick={() => void runAgain()}>
           Giao lại
         </button>
-        {active && (
+        {active && canCancel && (
           <button type="button" className="secondary danger" onClick={() => actions.cancelTask(task.id)}>
             Huỷ task
           </button>

@@ -1,9 +1,14 @@
-# Local Postgres for the AI office.
+# Postgres for the AI office:
 #   docker compose up -d
 #   DATABASE_URL=postgres://tuban:tuban@localhost:5432/tuban npm run dev
+#
+# Shared memory with Mem0 + Vietnamese embeddings (optional, see README "Bộ nhớ chung"):
+#   MEM0_API_KEY=<a long random string> docker compose --profile memory up -d
+# The first start downloads the embedding model (~2.3 GB) into the hf-models volume.
 services:
   postgres:
-    image: postgres:17
+    # pgvector image: plain Postgres 17 plus the vector extension Mem0 needs
+    image: pgvector/pgvector:pg17
     environment:
       POSTGRES_USER: tuban
       POSTGRES_PASSWORD: tuban
@@ -12,10 +17,55 @@ services:
       - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./deploy/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U tuban"]
       interval: 5s
       retries: 10
 
+  # Hugging Face text-embeddings-inference serving AITeamVN/Vietnamese_Embedding (1024 dims)
+  # with an OpenAI-compatible /v1/embeddings API. Use a cuda-* image tag on a GPU machine.
+  tei:
+    profiles: [memory]
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.6
+    command: ["--model-id", "AITeamVN/Vietnamese_Embedding"]
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - hf-models:/data
+
+  # Mem0 REST server: stores memories as vectors in Postgres, extracts facts with an LLM
+  # (through 9router). The office sends it the model settings at start-up (POST /configure).
+  mem0:
+    profiles: [memory]
+    image: mem0/mem0-api-server
+    command: ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # the same value the office uses; without it Mem0 answers 401 to the office
+      ADMIN_API_KEY: ${MEM0_API_KEY:-}
+      JWT_SECRET: ${MEM0_JWT_SECRET:-change-me-tuban-mem0}
+      MEM0_TELEMETRY: "false"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: mem0
+      POSTGRES_USER: tuban
+      POSTGRES_PASSWORD: tuban
+      APP_DB_NAME: mem0_app
+      HISTORY_DB_PATH: /app/history/history.db
+      # Mem0's built-in defaults also go through 9router until the office configures it
+      OPENAI_API_KEY: ${NINEROUTER_KEY:-unused}
+      OPENAI_BASE_URL: http://host.docker.internal:20128/v1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:8888:8000"
+    volumes:
+      - mem0-history:/app/history
+
 volumes:
   pgdata:
+  hf-models:
+  mem0-history:

@@ -26,7 +26,9 @@ export const cursorProvider: AgentProvider = {
 
   run(ctx: RunContext): Promise<RunResult> {
     return new Promise((resolve, reject) => {
-      const child = spawn(CURSOR_AGENT_CMD, ["-p", ctx.task.prompt, "--output-format", "stream-json"], {
+      // Cursor has no access to our in-process tools, so recalled memories go into the prompt.
+      const prompt = ctx.memoryContext ? `${ctx.task.prompt}\n\n---\n${ctx.memoryContext}` : ctx.task.prompt;
+      const child = spawn(CURSOR_AGENT_CMD, ["-p", prompt, "--output-format", "stream-json"], {
         cwd: ctx.workdir,
         env: process.env,
       });

@@ -46,6 +46,7 @@ export const EVENT_ICON: Record<AgentEvent["type"], string> = {
   error: "⚠",
   meeting: "👥",
   config: "⚙",
+  memory: "🧠",
 };
 
 export function TimelineItem({ event, agent }: { event: AgentEvent; agent?: AgentInfo }) {

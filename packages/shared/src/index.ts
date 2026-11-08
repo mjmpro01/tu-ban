@@ -1,5 +1,25 @@
 // Types shared by the server and the web client.
 
+export type Role = "admin" | "member";
+
+export interface UserInfo {
+  id: string;
+  username: string;
+  displayName: string;
+  role: Role;
+  disabled: boolean;
+  createdAt: number;
+}
+
+/** GET /api/auth/me. `needsSetup` = no account exists yet: the first visitor creates the admin. */
+export interface MeResponse {
+  user: UserInfo | null;
+  needsSetup: boolean;
+}
+
+/** Header every state-changing API request must carry (blocks cross-site form posts). */
+export const CSRF_HEADER = "x-tuban";
+
 export type ProviderId = "claude" | "cursor" | "copilot" | "mock";
 export type CharacterId = "manager" | "researcher" | "writer" | "cursor" | "copilot";
 
@@ -141,6 +161,12 @@ export interface Task {
   kind: TaskKind;
   status: TaskStatus;
   createdAt: number;
+  /** Display name of the user who created the request (sub-tasks inherit it). */
+  createdBy?: string;
+  /** User id of the creator (lets members cancel their own tasks). */
+  createdById?: string;
+  /** The finished task this one continues (a hand-off from the overview board). */
+  followUpOf?: string;
   startedAt?: number;
   finishedAt?: number;
   result?: string;
@@ -159,6 +185,7 @@ export type AgentEventType =
   | "approval_resolved"
   | "meeting"
   | "config"
+  | "memory"
   | "done"
   | "error";
 
@@ -178,6 +205,8 @@ export interface AgentEvent {
   targetAgentId?: string;
   /** For meetings: the agents taking part. */
   participants?: string[];
+  /** The person behind the event (approvals, config changes, cancellations). */
+  actor?: string;
   usage?: Usage;
 }
 
@@ -192,6 +221,126 @@ export interface Approval {
   input: string;
   status: ApprovalStatus;
   createdAt: number;
+  decidedBy?: string;
+}
+
+/** Spending and teamwork limits, editable by admins in "Thống kê & ngân sách". */
+export interface BudgetSettings {
+  /** Hard ceiling per task for Claude agents (USD). */
+  maxTaskUsd: number;
+  /** Ceiling for one user request and everything the Manager delegates for it (USD). */
+  maxRequestUsd: number;
+  /** Ceiling for all spending in one day (USD). 0 = no daily limit. */
+  dailyUsd: number;
+  maxSubtasks: number;
+  maxReviewRounds: number;
+  /** Max agent turns per task. */
+  maxTurns: number;
+}
+
+export interface DayStats {
+  /** YYYY-MM-DD in the server's time zone */
+  date: string;
+  /** Requests created that day (sub-tasks not counted). */
+  requests: number;
+  done: number;
+  errors: number;
+  /** All spending that day, sub-tasks included. */
+  costUsd: number;
+  tokens: number;
+}
+
+export interface AgentStats {
+  agentId: string;
+  tasks: number;
+  done: number;
+  errors: number;
+  costUsd: number;
+  tokens: number;
+  /** Average run time of finished tasks, null when none finished. */
+  avgDurationMs: number | null;
+}
+
+export interface StatsResponse {
+  timeZone: string;
+  days: DayStats[];
+  agents: AgentStats[];
+  today: { costUsd: number; requests: number; done: number; errors: number };
+  budget: BudgetSettings;
+}
+
+/** Which events send a notification (admins switch them on and off). */
+export interface NotificationEvents {
+  /** An agent waits for approval. */
+  approval: boolean;
+  /** A request finished. */
+  done: boolean;
+  /** A request failed. */
+  error: boolean;
+  /** The daily budget reached 80% / 100%. */
+  budget: boolean;
+}
+
+export interface NotificationStatus {
+  events: NotificationEvents;
+  channels: Record<"telegram" | "slack", { configured: boolean; lastError?: string }>;
+  publicUrl: string;
+  lastSentAt?: number;
+}
+
+// ---------------------------------------------------------------- shared memory
+/**
+ * office: everyone shares it. agent: one agent's own notes. request: notes for one user request
+ * (the Manager's task and everything it delegated), so team members can pass context to each other.
+ */
+export type MemoryScope = "office" | "agent" | "request";
+export const MEMORY_SCOPES: MemoryScope[] = ["office", "agent", "request"];
+
+export interface MemoryItem {
+  id: string;
+  text: string;
+  scope: MemoryScope;
+  /** For agent memories: whose they are. Otherwise the agent that saved it, if any. */
+  agentId?: string;
+  /** For request memories: the root task id. */
+  runId?: string;
+  /** Who added it: an agent id, a person's name, or "auto" for automatic saves. */
+  createdBy?: string;
+  taskId?: string;
+  createdAt?: number;
+  updatedAt?: number;
+  /** Relevance (0..1) in search results. */
+  score?: number;
+}
+
+export interface MemorySettings {
+  /** Put the most relevant memories into every task's prompt. */
+  autoRecall: boolean;
+  /** Save what finished user requests produced into the office memory. */
+  autoSave: boolean;
+  /** How many memories auto-recall adds at most. */
+  recallLimit: number;
+}
+
+export const DEFAULT_MEMORY_SETTINGS: MemorySettings = { autoRecall: true, autoSave: true, recallLimit: 5 };
+
+export interface MemoryStatus {
+  /** mem0: a Mem0 server (vector search). local: keyword search in this server's database. */
+  backend: "mem0" | "local";
+  ok: boolean;
+  lastError?: string;
+  settings: MemorySettings;
+  /** Models Mem0 uses (through 9router or the embedding server), for display. */
+  llmModel?: string;
+  embedModel?: string;
+}
+
+export interface MemoryQuery {
+  q?: string;
+  scope?: MemoryScope;
+  agentId?: string;
+  runId?: string;
+  limit?: number;
 }
 
 export interface Snapshot {
@@ -232,6 +381,15 @@ export function matchesTaskQuery(t: Task, f: TaskQuery): boolean {
   }
   return true;
 }
+
+/** Who usually takes over after an agent's work (the overview board shows the first enabled one as the suggestion). */
+export const NEXT_AGENT_HINTS: Record<string, string[]> = {
+  researcher: ["writer", "manager"],
+  writer: ["researcher", "manager"],
+  cursor: ["researcher", "copilot"],
+  copilot: ["researcher", "cursor"],
+  manager: ["writer", "researcher"],
+};
 
 export interface CreateTaskInput {
   prompt: string;
