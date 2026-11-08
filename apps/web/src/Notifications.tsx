@@ -124,6 +124,11 @@ function NotificationsBody() {
       </fieldset>
 
       <fieldset className="settings-group">
+        <legend>Giao việc qua chat</legend>
+        <ChatBots status={status} />
+      </fieldset>
+
+      <fieldset className="settings-group">
         <legend>Gửi thông báo khi</legend>
         <ul className="skill-checks">
           {EVENTS.map((ev) => (
@@ -146,5 +151,44 @@ function NotificationsBody() {
         </p>
       )}
     </div>
+  );
+}
+
+function ChatBots({ status }: { status: NotificationStatus }) {
+  const tg = status.telegramBot;
+  const sl = status.slackBot;
+  return (
+    <ul className="channels">
+      <li className="channel">
+        <div>
+          <strong>Telegram</strong>{" "}
+          {tg?.enabled ? (
+            <span className={`kind-badge ${tg.ok ? "ok" : "off"}`}>{tg.ok ? `Đang nghe${tg.username ? ` @${tg.username}` : ""}` : "Mất kết nối"}</span>
+          ) : (
+            <span className="kind-badge off">Tắt</span>
+          )}
+          {tg?.enabled && (
+            <div className="muted">
+              {tg.allowedChats} chat được giao việc · {tg.adminChats} chat được duyệt, huỷ và ghi nhớ
+            </div>
+          )}
+          {tg?.lastError && <div className="error">Lỗi: {tg.lastError}</div>}
+        </div>
+        {!tg?.enabled && <code className="env-hint">TELEGRAM_BOT_TOKEN=…  TELEGRAM_ALLOWED_CHATS=…</code>}
+      </li>
+      <li className="channel">
+        <div>
+          <strong>Slack</strong>{" "}
+          {sl?.enabled ? (
+            <span className={`kind-badge ${sl.ok ? "ok" : "off"}`}>{sl.ok ? "Đang nghe" : "Mất kết nối"}</span>
+          ) : (
+            <span className="kind-badge off">Tắt</span>
+          )}
+          {sl?.enabled && <div className="muted">{sl.allowedChannels ? `${sl.allowedChannels} kênh được giao việc` : "Mọi kênh có bot"}</div>}
+          {sl?.lastError && <div className="error">Lỗi: {sl.lastError}</div>}
+        </div>
+        {!sl?.enabled && <code className="env-hint">SLACK_APP_TOKEN=xapp-…  SLACK_BOT_TOKEN=xoxb-…</code>}
+      </li>
+    </ul>
   );
 }

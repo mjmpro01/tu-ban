@@ -92,3 +92,28 @@ export const MEMORY_LLM_MODEL = env.MEMORY_LLM_MODEL;
 export const MEMORY_EMBED_URL = env.MEMORY_EMBED_URL?.replace(/\/$/, "");
 export const MEMORY_EMBED_MODEL = env.MEMORY_EMBED_MODEL ?? (env.MEMORY_EMBED_URL ? "AITeamVN/Vietnamese_Embedding" : undefined);
 export const MEMORY_EMBED_DIMS = Number(env.MEMORY_EMBED_DIMS ?? 1024);
+
+/**
+ * Two-way Telegram: the bot also takes requests and approvals (long polling, no public URL needed).
+ * On by default when TELEGRAM_BOT_TOKEN is set; TELEGRAM_BOT_COMMANDS=0 keeps it send-only.
+ */
+export const TELEGRAM_BOT_COMMANDS = !!TELEGRAM_BOT_TOKEN && env.TELEGRAM_BOT_COMMANDS !== "0";
+const ids = (v?: string) => (v ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+/** Chats that may send requests. Default: TELEGRAM_CHAT_ID. */
+export const TELEGRAM_ALLOWED_CHATS = ids(env.TELEGRAM_ALLOWED_CHATS ?? TELEGRAM_CHAT_ID);
+/** Chats that may also approve, cancel and edit memory (admin rights). Default: TELEGRAM_CHAT_ID. */
+export const TELEGRAM_ADMIN_CHATS = ids(env.TELEGRAM_ADMIN_CHATS ?? TELEGRAM_CHAT_ID);
+
+/**
+ * Two-way Slack through Socket Mode (no public URL): an app-level token (xapp-…, scope connections:write)
+ * and a bot token (xoxb-…, scopes app_mentions:read, chat:write, im:history).
+ */
+export const SLACK_APP_TOKEN = env.SLACK_APP_TOKEN;
+export const SLACK_BOT_TOKEN = env.SLACK_BOT_TOKEN;
+export const SLACK_API_BASE = (env.SLACK_API_BASE ?? "https://slack.com/api").replace(/\/$/, "");
+/** Channel ids that may send requests (empty = any channel the bot is in, and direct messages). */
+export const SLACK_ALLOWED_CHANNELS = ids(env.SLACK_ALLOWED_CHANNELS);
+/** Slack user ids that may approve, cancel and write memory. */
+export const SLACK_ADMIN_USERS = ids(env.SLACK_ADMIN_USERS);
+/** Channel where approval requests are posted with buttons. */
+export const SLACK_APPROVAL_CHANNEL = env.SLACK_APPROVAL_CHANNEL;

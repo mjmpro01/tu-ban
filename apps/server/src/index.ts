@@ -25,6 +25,8 @@ import { Budget, TIME_ZONE } from "./budget.ts";
 import { Memory } from "./memory.ts";
 import { Notifier } from "./notifier.ts";
 import { Scheduler } from "./schedules.ts";
+import { SlackBot } from "./slack.ts";
+import { TelegramBot } from "./telegram.ts";
 import { PgPersistence } from "./db.ts";
 import { type Actor, Orchestrator } from "./orchestrator.ts";
 import { deleteSkill, getSkill, listSkills, saveSkill, skillExists } from "./skills.ts";
@@ -56,6 +58,10 @@ const notifier = new Notifier(store, budget);
 await notifier.init();
 const scheduler = new Scheduler(store, orchestrator, budget);
 await scheduler.init();
+const telegram = new TelegramBot(store, orchestrator, memory);
+telegram.init();
+const slack = new SlackBot(store, orchestrator, memory);
+slack.init();
 
 // ---------------------------------------------------------------- auth
 let io: Server<ClientToServer, ServerToClient, Record<string, never>, SocketData> | undefined;
@@ -218,9 +224,13 @@ app.put<{ Body: Partial<BudgetSettings> }>("/api/settings/budget", async (req) =
 });
 
 // notifications (admin)
-app.get("/api/settings/notifications", async () => notifier.status());
-app.put<{ Body: Partial<NotificationEvents> }>("/api/settings/notifications", async (req) => notifier.updateEvents(req.body ?? {}));
-app.post("/api/settings/notifications/test", async (req) => notifier.test(req.user!.displayName));
+const notifyStatus = () => ({ ...notifier.status(), telegramBot: telegram.status(), slackBot: slack.status() });
+app.get("/api/settings/notifications", async () => notifyStatus());
+app.put<{ Body: Partial<NotificationEvents> }>("/api/settings/notifications", async (req) => {
+  await notifier.updateEvents(req.body ?? {});
+  return notifyStatus();
+});
+app.post("/api/settings/notifications/test", async (req) => ({ ...(await notifier.test(req.user!.displayName)), status: notifyStatus() }));
 
 // shared memory: everyone reads, admins edit (agents write through their memory tools)
 app.get("/api/memory/status", async () => memory.status());
@@ -349,6 +359,8 @@ console.log(`AI office server on http://localhost:${PORT} (mode: ${MODE}, workdi
 
 const shutdown = async () => {
   scheduler.stop();
+  telegram.stop();
+  slack.stop();
   io?.close();
   await app.close();
   await db?.close();

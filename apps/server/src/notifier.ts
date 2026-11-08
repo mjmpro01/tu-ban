@@ -1,6 +1,7 @@
 import type { Approval, NotificationEvents, NotificationStatus, Task } from "@tu-ban/shared";
 import { type Budget, startOfToday } from "./budget.ts";
-import { PUBLIC_URL, SLACK_WEBHOOK_URL, TELEGRAM_API_BASE, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID } from "./config.ts";
+import { PUBLIC_URL, SLACK_WEBHOOK_URL, TELEGRAM_API_BASE, TELEGRAM_BOT_COMMANDS, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID } from "./config.ts";
+import { TelegramBot } from "./telegram.ts";
 import type { Store } from "./store.ts";
 
 export const DEFAULT_EVENTS: NotificationEvents = { approval: true, done: true, error: true, budget: true };
@@ -13,7 +14,7 @@ type Channel = "telegram" | "slack";
 /** Sends short messages to Telegram and/or Slack when something needs a human or a request ends. */
 export class Notifier {
   private events: NotificationEvents = { ...DEFAULT_EVENTS };
-  private queue: string[] = [];
+  private queue: { text: string; telegramMarkup?: unknown }[] = [];
   private sending = false;
   private lastError: Record<Channel, string | undefined> = { telegram: undefined, slack: undefined };
   private lastSentAt: number | undefined;
@@ -87,13 +88,19 @@ export class Notifier {
     if (a.status !== "pending" || !this.events.approval || this.announced.has(`approval:${a.id}`)) return;
     this.announced.add(`approval:${a.id}`);
     const agent = this.store.agents.get(a.agentId)?.name ?? a.agentId;
-    this.push(`⏳ ${agent} cần duyệt: ${a.summary}\nDuyệt tại: ${PUBLIC_URL}`);
+    // with the two-way bot, the message carries Approve / Deny buttons
+    this.push(
+      `⏳ ${agent} cần duyệt: ${a.summary}\n${TELEGRAM_BOT_COMMANDS ? "Bấm nút bên dưới hoặc duyệt tại" : "Duyệt tại"}: ${PUBLIC_URL}`,
+      TELEGRAM_BOT_COMMANDS ? TelegramBot.approvalMarkup(a) : undefined,
+    );
   }
 
   private onTask(t: Task) {
     if (t.status === "done" || t.status === "error") void this.checkBudget();
     // only requests from people: sub-tasks are part of their request
     if (t.parentId || this.announced.has(t.id)) return;
+    // requests sent from a chat get their answer in that chat
+    if (t.source === "telegram" || t.source === "slack") return;
     if (t.status !== "done" && t.status !== "error" && t.status !== "cancelled") return;
     this.announced.add(t.id);
     const agent = this.store.agents.get(t.agentId)?.name ?? t.agentId;
@@ -125,10 +132,10 @@ export class Notifier {
   }
 
   // ---------------------------------------------------------------- sending
-  private push(text: string) {
+  private push(text: string, telegramMarkup?: unknown) {
     if (!this.channels.length) return;
     if (this.queue.length >= MAX_QUEUE) return; // drop rather than flood
-    this.queue.push(text);
+    this.queue.push({ text, telegramMarkup });
     void this.drain();
   }
 
@@ -137,15 +144,15 @@ export class Notifier {
     this.sending = true;
     try {
       while (this.queue.length) {
-        const text = this.queue.shift()!;
-        for (const ch of this.channels) await this.sendTo(ch, text).catch(() => {});
+        const item = this.queue.shift()!;
+        for (const ch of this.channels) await this.sendTo(ch, item.text, item.telegramMarkup).catch(() => {});
       }
     } finally {
       this.sending = false;
     }
   }
 
-  private async sendTo(channel: Channel, text: string) {
+  private async sendTo(channel: Channel, text: string, telegramMarkup?: unknown) {
     try {
       const res =
         channel === "telegram"
@@ -153,7 +160,12 @@ export class Notifier {
               method: "POST",
               headers: { "content-type": "application/json" },
               // plain text (no parse_mode): nothing in the message can be interpreted as markup
-              body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: text.slice(0, 4000), disable_web_page_preview: true }),
+              body: JSON.stringify({
+                chat_id: TELEGRAM_CHAT_ID,
+                text: text.slice(0, 4000),
+                disable_web_page_preview: true,
+                ...(telegramMarkup ? { reply_markup: telegramMarkup } : {}),
+              }),
               signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
             })
           : await fetch(SLACK_WEBHOOK_URL!, {

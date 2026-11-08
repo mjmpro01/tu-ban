@@ -292,6 +292,10 @@ export interface NotificationStatus {
   channels: Record<"telegram" | "slack", { configured: boolean; lastError?: string }>;
   publicUrl: string;
   lastSentAt?: number;
+  /** Two-way Telegram (requests and approvals from the chat). */
+  telegramBot?: { enabled: boolean; ok: boolean; username?: string; lastError?: string; allowedChats: number; adminChats: number };
+  /** Two-way Slack (Socket Mode). */
+  slackBot?: { enabled: boolean; ok: boolean; lastError?: string; allowedChannels: number };
 }
 
 // ---------------------------------------------------------------- shared memory
