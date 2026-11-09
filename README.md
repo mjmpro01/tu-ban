@@ -97,10 +97,46 @@ Admin vào **menu người dùng → Thông báo** để xem kênh nào đã c�
 - Yêu cầu lỗi.
 - Ngân sách ngày chạm 80% và 100%.
 
+### Giao việc qua Telegram / Slack
+
+Ngoài nhận thông báo, bạn có thể **giao việc và duyệt ngay trong chat**. Server tự kết nối ra ngoài (Telegram long polling, Slack Socket Mode), nên **không cần địa chỉ public**.
+
+**Telegram** (bật sẵn khi có `TELEGRAM_BOT_TOKEN`; đặt `TELEGRAM_BOT_COMMANDS=0` để chỉ gửi thông báo):
+- Nhắn cho bot là giao việc cho Manager; `@writer <việc>` giao thẳng cho một agent. Khi xong, bot trả lời ngay dưới tin nhắn đó.
+- Lệnh: `/trangthai`, `/viec`, `/huy <mã>`, `/timnho <từ khoá>`, `/nho <nội dung>`, `/help`.
+- Tin "cần duyệt" có nút **Duyệt / Từ chối**.
+- `TELEGRAM_ALLOWED_CHATS`: các chat được giao việc (mặc định `TELEGRAM_CHAT_ID`). Chat lạ nhắn tới sẽ được báo chat id của nó để admin thêm vào.
+- `TELEGRAM_ADMIN_CHATS`: các chat được duyệt, huỷ và ghi bộ nhớ (mặc định `TELEGRAM_CHAT_ID`). Trong nhóm, ai trong nhóm cũng có quyền của nhóm đó.
+- Tin nhắn gửi lúc server tắt (cũ hơn 10 phút) bị bỏ qua.
+
+**Slack** (Socket Mode):
+1. Tạo Slack app, bật **Socket Mode**, tạo *app-level token* (`connections:write`) → `SLACK_APP_TOKEN=xapp-…`.
+2. Bot token scopes: `app_mentions:read`, `chat:write`, `im:history`; Event Subscriptions: `app_mention`, `message.im`; bật **Interactivity**. Cài app → `SLACK_BOT_TOKEN=xoxb-…`.
+3. Nhắc tên bot trong kênh (hoặc nhắn riêng) để giao việc; kết quả trả lời trong thread. Gõ `trạng thái`, `việc`, `huỷ <mã>`, `tìm nhớ …`, `nhớ …`.
+4. `SLACK_APPROVAL_CHANNEL`: kênh nhận yêu cầu duyệt có nút; chỉ người trong `SLACK_ADMIN_USERS` (Slack user id) bấm được. `SLACK_ALLOWED_CHANNELS` giới hạn kênh được giao việc.
+
+Màn hình **Thông báo** hiện trạng thái hai bot. Người giao việc qua chat được ghi là "Tên (Telegram)" / "Slack <id>"; chỉ admin trên dashboard huỷ được các yêu cầu này.
+
 Lưu ý:
 - Token và webhook chỉ nằm trong biến môi trường: không lưu vào database, không hiện trên dashboard, không ghi vào log.
 - Tin nhắn có link về `PUBLIC_URL`, nên đặt biến này thành địa chỉ thật của dashboard.
 - Gửi lỗi (mạng, token sai…) không làm hỏng việc của agent: lỗi được ghi log và hiện ở màn hình Thông báo.
+
+### Lịch chạy định kỳ
+
+**Lịch chạy** trên dashboard: agent tự nhận việc theo lịch, ví dụ "Thứ 2–6 lúc 08:00 tìm 5 tin công nghệ mới". Chọn tần suất (mỗi ngày, thứ 2–6, mỗi tuần, mỗi tháng, mỗi giờ) hoặc nhập cron 5 phần (`phút giờ ngày tháng thứ`). Giờ tính theo múi giờ của server (`TZ`).
+
+- Việc chạy dưới tên người tạo lịch và có dấu ⏰ trong danh sách task.
+- Một lần chạy bị **bỏ qua** (và ghi lý do) khi lần trước chưa xong, agent đang tắt hoặc đã hết ngân sách ngày. Lần chạy bị lỡ lúc server tắt không chạy bù.
+- Hai lần chạy phải cách nhau ít nhất 5 phút. Admin tạo, sửa, tạm dừng, xoá và bấm **Chạy ngay**; mọi người xem được.
+
+### Tài liệu tham khảo
+
+**Tài liệu** trên dashboard: admin tải lên PDF, Word (.docx), Markdown, TXT, CSV, HTML… (tối đa 20 MB/file). Agent sẽ:
+- tìm và trích dẫn bằng công cụ `library_search` / `library_list` (agent Claude), mở file gốc trong `workspace/library/` khi cần đọc thêm;
+- tự nhận những đoạn khớp nhất với yêu cầu (kèm tên file) trong hướng dẫn trước mỗi task (tắt được, chỉnh số đoạn).
+
+Chữ được lấy ra ngay trên server, không cần cài thêm gì: PDF có chữ (xuất từ Word, trình duyệt, LaTeX…, kể cả font nhúng tiếng Việt), .docx, HTML. PDF scan (ảnh) không có chữ để tìm, nhưng file vẫn được lưu để agent mở. Tìm kiếm theo từ khoá (BM25), không phân biệt dấu. Bấm **Xem nội dung** để xem đúng phần chữ agent đọc được.
 
 ### Lưu dữ liệu vào Postgres
 
@@ -229,6 +265,13 @@ Server phục vụ luôn bản web đã build ở http://localhost:8787.
 | `MEMORY_EMBED_URL` |  | Server embedding (text-embeddings-inference) tính từ Mem0, vd. `http://tei` |
 | `MEMORY_EMBED_MODEL` / `MEMORY_EMBED_DIMS` | `AITeamVN/Vietnamese_Embedding` / `1024` | Model embedding và số chiều vector |
 | `MEM0_CONFIGURE` | `1` | `0` = không gửi cấu hình model cho Mem0 lúc khởi động |
+| `TELEGRAM_BOT_COMMANDS` | `1` khi có token | `0` = bot chỉ gửi thông báo, không nhận lệnh |
+| `TELEGRAM_ALLOWED_CHATS` / `TELEGRAM_ADMIN_CHATS` | `TELEGRAM_CHAT_ID` | Chat được giao việc / được duyệt, huỷ, ghi bộ nhớ (cách nhau bằng dấu phẩy) |
+| `SLACK_APP_TOKEN` / `SLACK_BOT_TOKEN` |  | Bật bot Slack (Socket Mode) |
+| `SLACK_ALLOWED_CHANNELS` / `SLACK_ADMIN_USERS` / `SLACK_APPROVAL_CHANNEL` |  | Kênh được giao việc, người được duyệt, kênh nhận yêu cầu duyệt |
+| `COPILOT_REPO` / `COPILOT_GITHUB_TOKEN` |  | Repo và token cho Dev Copilot (token mặc định lấy `GITHUB_TOKEN`) |
+| `COPILOT_BASE_BRANCH` |  | Nhánh gốc cho PR của Copilot |
+| `COPILOT_POLL_SECONDS` / `COPILOT_TIMEOUT_MINUTES` | `30` / `120` | Nhịp hỏi GitHub và thời gian chờ tối đa |
 
 ## Các agent
 
@@ -274,7 +317,7 @@ Giá trị mặc định:
 | Researcher | Claude | Tìm kiếm, đọc tài liệu, review |
 | Writer | Claude | Viết báo cáo, nội dung |
 | Dev Cursor | Cursor CLI (**thử nghiệm**) | Sửa code trong repo local |
-| Dev Copilot | GitHub Copilot (**chưa làm**) | Issue → PR |
+| Dev Copilot | GitHub Copilot coding agent | Issue → PR |
 
 ### Làm việc nhóm
 
@@ -307,7 +350,23 @@ Manager chạy việc độc lập song song, chuyển kết quả bước trư�
 Ở chế độ Live, provider nào chưa dùng được sẽ tự chạy bằng kịch bản demo. Dashboard hiện nhãn "demo" bên cạnh agent đó.
 
 - **Cursor:** cần cài Cursor CLI. Adapter đọc output `stream-json`. CLI này thay đổi nhanh, nên kiểm tra lại cờ và định dạng output trong `apps/server/src/providers/cursor.ts`.
-- **Copilot:** mới là khung trống; luồng dự kiến được ghi trong `apps/server/src/providers/copilot.ts`.
+- **Copilot:** xem mục **Dev Copilot (GitHub)** bên dưới.
+
+### Dev Copilot (GitHub)
+
+Việc giao cho Dev Copilot trở thành một **issue trên GitHub giao cho Copilot coding agent**. Copilot làm trên cloud của GitHub và mở pull request; văn phòng theo dõi tới khi xong rồi trả về link PR.
+
+```bash
+TU_BAN_MODE=live COPILOT_REPO=owner/ten-repo COPILOT_GITHUB_TOKEN=github_pat_... npm run dev
+```
+
+- Repo phải bật **Copilot coding agent** (cần gói Copilot có tính năng này).
+- Token phải là **token của người dùng**: fine-grained PAT có quyền Issues và Pull requests (đọc/ghi) trên repo, hoặc classic PAT có scope `repo`. Token của GitHub App/Actions mặc định không giao được cho Copilot.
+- Tạo issue theo quyền **Ghi file** của Dev Copilot (mặc định phải duyệt), vì mỗi issue tốn lượt Copilot.
+- Issue chứa yêu cầu, bối cảnh từ bộ nhớ / tài liệu, và system prompt của agent được gửi làm `custom_instructions`. `COPILOT_BASE_BRANCH` chọn nhánh gốc.
+- Văn phòng hỏi GitHub mỗi `COPILOT_POLL_SECONDS` giây (mặc định 30): báo khi Copilot mở PR, khi có commit mới, và coi là xong khi Copilot báo xong (hoặc PR thôi là draft / bỏ `[WIP]`). Quá `COPILOT_TIMEOUT_MINUTES` (mặc định 120) thì báo lỗi kèm link để theo dõi tiếp.
+- Huỷ task thì văn phòng để lại bình luận trên issue; Copilot có thể vẫn chạy nốt trên GitHub.
+- API giao issue cho Copilot (`copilot-swe-agent[bot]`, `agent_assignment`) đang ở dạng public preview và có thể đổi; nếu GitHub đổi tên tài khoản bot, đặt `COPILOT_ASSIGNEE`.
 
 ## Cấu trúc
 
@@ -324,6 +383,7 @@ Mọi provider đều phát ra cùng một kiểu `AgentEvent`. Mỗi event mang
 
 ## Lưu ý
 
+- Lịch chạy và tài liệu cũng có API: `GET /api/schedules`, `GET /api/library`, `GET /api/library/search?q=…`; tải tài liệu lên bằng `POST /api/library?name=<tên file>` với body là file (`application/octet-stream`, admin).
 - Bộ nhớ chung cũng có API: `GET /api/memory?q=&scope=office|agent|request&agentId=&runId=` (mọi người), `POST /api/memory`, `PUT` / `DELETE /api/memory/<id>` (admin).
 - Dashboard hiển thị 100 task và 200 event gần nhất. Lịch sử cũ hơn lấy qua API: `GET /api/tasks?limit=50&before=<ms>&agentId=<id>` và `GET /api/tasks/<id>/events`.
 - Khi mở dashboard ra Internet, đặt server sau HTTPS (reverse proxy) và đặt `PUBLIC_URL` là địa chỉ https.

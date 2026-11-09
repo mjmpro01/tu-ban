@@ -117,3 +117,18 @@ export const SLACK_ALLOWED_CHANNELS = ids(env.SLACK_ALLOWED_CHANNELS);
 export const SLACK_ADMIN_USERS = ids(env.SLACK_ADMIN_USERS);
 /** Channel where approval requests are posted with buttons. */
 export const SLACK_APPROVAL_CHANNEL = env.SLACK_APPROVAL_CHANNEL;
+
+/**
+ * GitHub Copilot coding agent: a task becomes a GitHub issue assigned to Copilot, which works in
+ * the cloud and opens a pull request. Needs a user token (fine-grained PAT with Issues and
+ * Pull requests read/write, or a classic PAT with the repo scope) on a repository where the
+ * Copilot coding agent is enabled.
+ */
+export const COPILOT_GITHUB_TOKEN = env.COPILOT_GITHUB_TOKEN ?? env.GITHUB_TOKEN;
+/** owner/name of the repository Copilot works in. */
+export const COPILOT_REPO = env.COPILOT_REPO;
+export const COPILOT_BASE_BRANCH = env.COPILOT_BASE_BRANCH;
+export const COPILOT_ASSIGNEE = env.COPILOT_ASSIGNEE ?? "copilot-swe-agent[bot]";
+export const GITHUB_API_BASE = (env.GITHUB_API_BASE ?? "https://api.github.com").replace(/\/$/, "");
+export const COPILOT_POLL_SECONDS = Math.max(5, Number(env.COPILOT_POLL_SECONDS ?? 30));
+export const COPILOT_TIMEOUT_MINUTES = Number(env.COPILOT_TIMEOUT_MINUTES ?? 120);
